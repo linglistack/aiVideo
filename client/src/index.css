@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles below this line */
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+@layer components {
+  .tiktok-button {
+    @apply bg-tiktok-pink text-white font-semibold py-2 px-4 rounded-md hover:bg-opacity-90 transition-all duration-200;
+  }
+
+  .tiktok-btn-primary {
+    @apply bg-tiktok-pink text-white font-semibold px-6 py-3 rounded-full hover:bg-opacity-90 transition duration-200;
+  }
+
+  .tiktok-btn-secondary {
+    @apply bg-transparent text-tiktok-dark border border-tiktok-dark font-semibold px-6 py-3 rounded-full hover:bg-tiktok-gray transition duration-200;
+  }
+
+  .tiktok-gradient-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-tiktok-blue to-tiktok-pink;
+  }
+
+  .tiktok-card {
+    @apply bg-white rounded-xl shadow-xl hover:shadow-2xl transition duration-300 overflow-hidden;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}

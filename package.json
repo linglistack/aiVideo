@@ -1,0 +1,23 @@
+{
+    "name": "tiktok-avatar-generator",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "install-server": "cd server && npm install",
+        "install-client": "cd client && npm install",
+        "install-all": "concurrently \"npm run install-server\" \"npm run install-client\"",
+        "server": "cd server && npm run dev",
+        "client": "cd client && npm start",
+        "dev": "concurrently \"npm run server\" \"npm run client\""
+    },
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "autoprefixer": "^10.4.14",
+        "concurrently": "^8.2.2",
+        "postcss": "^8.4.21",
+        "tailwindcss": "^3.3.0"
+    }
+}
