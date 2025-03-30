@@ -29,7 +29,7 @@ router.post('/create-checkout-session', protect, createCheckoutSession);
 router.post('/create-payment-intent', protect, createPaymentIntent);
 
 // Cancel subscription
-router.post('/cancel', protect, cancelSubscription);
+router.delete('/cancel', protect, cancelSubscription);
 
 // Stripe webhook
 router.post('/webhook', express.raw({ type: 'application/json' }), handleWebhook);

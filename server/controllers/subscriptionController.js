@@ -129,12 +129,30 @@ const getCurrentSubscription = async (req, res) => {
 // @access  Private
 const cancelSubscription = async (req, res) => {
   try {
+    // Store any provided reason for analytics
+    const { reason } = req.body;
+    
+    // Log the cancellation reason if provided
+    if (reason) {
+      console.log(`User ${req.user._id} cancellation reason: ${reason}`);
+      // In a production app, you might want to store this in a database
+    }
+    
+    // Cancel the subscription in Stripe
     const subscription = await stripeService.cancelSubscription(req.user._id);
     
+    // Get updated user data after cancellation
+    const user = await aiUser.findById(req.user._id);
+    
+    // Return comprehensive response with full subscription details
     res.json({
       success: true,
       message: 'Subscription canceled at period end',
-      subscription
+      subscription,
+      userSubscription: user.subscription,
+      cancelDate: new Date(),
+      endDate: user.subscription.endDate,
+      status: 'canceled'
     });
   } catch (error) {
     console.error('Error canceling subscription:', error);

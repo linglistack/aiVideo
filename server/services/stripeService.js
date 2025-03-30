@@ -136,10 +136,13 @@ const cancelSubscription = async (userId) => {
       { cancel_at_period_end: true }
     );
     
-    // Update user record
+    // Update user record with comprehensive cancellation details
     await aiUser.findByIdAndUpdate(userId, {
       'subscription.isActive': false,
-      'subscription.canceledAt': new Date()
+      'subscription.canceledAt': new Date(),
+      'subscription.status': 'canceled',
+      'subscription.cancelAtPeriodEnd': true,
+      'subscription.isCanceled': true
     });
     
     return subscription;

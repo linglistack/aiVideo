@@ -17,12 +17,13 @@ import {
   IoTrashOutline,
   IoWarningOutline,
   IoCloudUploadOutline,
-  IoReloadOutline
+  IoReloadOutline,
+  IoDownloadOutline
 } from 'react-icons/io5';
 import * as subscriptionService from '../../services/subscriptionService';
 import * as authService from '../../services/authService';
 
-const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
+const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscriptionUsage }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('profile');
@@ -71,6 +72,13 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
   const [avatar, setAvatar] = useState(user?.avatar || null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   
+  // Add refs for direct DOM manipulation
+  const cardNumberRef = useRef(null);
+  const expiryMonthRef = useRef(null);
+  const expiryYearRef = useRef(null);
+  const cvcRef = useRef(null);
+  const nameOnCardRef = useRef(null);
+  
   // Check for tab query parameter on mount
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -110,16 +118,50 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
           }
         }
         
-        // Fetch payment methods if user is logged in
-        if (user?.token) {
-          try {
-            const paymentResponse = await getPaymentMethods(user.token);
-            if (paymentResponse.success && paymentResponse.methods) {
-              setPaymentMethods(paymentResponse.methods);
+        // Always fetch payment methods on load to ensure they're up to date
+        try {
+          // Try to get token directly from localStorage for reliability
+          let token = null;
+          const userString = localStorage.getItem('user');
+          if (userString) {
+            const userData = JSON.parse(userString);
+            if (userData && userData.token) {
+              token = userData.token;
             }
-          } catch (error) {
-            console.error('Failed to load payment methods:', error);
           }
+          
+          // Use profile response token as fallback
+          if (!token && profileResponse.success) {
+            token = profileResponse.user.token;
+          }
+          
+          // Use user prop token as last resort
+          if (!token && user?.token) {
+            token = user.token;
+          }
+          
+          if (token) {
+            console.log('Fetching payment methods on initial load...');
+            const paymentResponse = await getPaymentMethods(token);
+            if (paymentResponse.success && paymentResponse.methods) {
+              console.log('Payment methods fetched:', paymentResponse.methods);
+              setPaymentMethods(paymentResponse.methods);
+              
+              // If we have payment methods, update the user object
+              if (paymentResponse.methods.length > 0) {
+                const updatedUser = JSON.parse(localStorage.getItem('user')) || user || {};
+                updatedUser.paymentMethod = paymentResponse.methods[0];
+                localStorage.setItem('user', JSON.stringify(updatedUser));
+                
+                // Update app state if we aren't already using user from profile response
+                if (!profileResponse.success) {
+                  setUser(updatedUser);
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load payment methods:', error);
         }
       } catch (error) {
         setError('Failed to load profile. Please try again.');
@@ -141,6 +183,59 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
     // Clear any previous success/error messages when changing tabs
     setSuccess('');
     setError('');
+    
+    // If switching to payment tab, refresh the payment methods
+    if (tab === 'payment') {
+      fetchPaymentMethods();
+    }
+  };
+  
+  // Fetch payment methods from server
+  const fetchPaymentMethods = async () => {
+    console.log('Fetching payment methods...');
+    try {
+      // Get token directly from localStorage for reliability
+      let token = null;
+      const userString = localStorage.getItem('user');
+      if (userString) {
+        const userData = JSON.parse(userString);
+        if (userData && userData.token) {
+          token = userData.token;
+        }
+      }
+      
+      // Use the component user state token as fallback
+      if (!token && user?.token) {
+        token = user.token;
+      }
+      
+      if (!token) {
+        console.error('No token available to fetch payment methods');
+        return;
+      }
+      
+      const response = await getPaymentMethods(token);
+      if (response.success && response.methods) {
+        console.log('Payment methods fetched successfully:', response.methods);
+        setPaymentMethods(response.methods);
+        
+        // If payment methods were fetched, update the user state and localStorage
+        if (response.methods.length > 0) {
+          const updatedUser = { ...user };
+          updatedUser.paymentMethod = response.methods[0];
+          setUser(updatedUser);
+          
+          // Update localStorage
+          const storedUser = JSON.parse(localStorage.getItem('user')) || {};
+          storedUser.paymentMethod = response.methods[0];
+          localStorage.setItem('user', JSON.stringify(storedUser));
+        }
+      } else {
+        console.log('No payment methods found or error in response');
+      }
+    } catch (error) {
+      console.error('Error fetching payment methods:', error);
+    }
   };
   
   // Handle profile form changes
@@ -332,12 +427,24 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
     }
   };
 
-  // Handle card form changes
+  // Handle card input changes with a simpler approach
   const handleCardChange = (e) => {
-    setCardForm({
-      ...cardForm,
-      [e.target.name]: e.target.value
-    });
+    const { name, value } = e.target;
+    
+    // Create a copy of the form data
+    const updatedForm = { ...cardForm };
+    
+    // Update the specific field
+    if (name === 'expiryMonth' || name === 'expiryYear' || name === 'cvc') {
+      // Only allow digits for these fields
+      const digits = value.replace(/\D/g, '');
+      updatedForm[name] = digits;
+    } else {
+      updatedForm[name] = value;
+    }
+    
+    // Update state with the new form data
+    setCardForm(updatedForm);
   };
   
   // Save payment method
@@ -425,25 +532,24 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
     }
   };
 
-  // Format card number with spaces
-  const formatCardNumber = (value) => {
-    if (!value) return '';
-    const digits = value.replace(/\D/g, '');
-    const groups = [];
-    
-    for (let i = 0; i < digits.length; i += 4) {
-      groups.push(digits.substring(i, i + 4));
-    }
-    
-    return groups.join(' ');
-  };
-
   // Handle card number input with formatting
   const handleCardNumberChange = (e) => {
-    const formatted = formatCardNumber(e.target.value);
+    // Get the raw value without spaces
+    const rawValue = e.target.value.replace(/\s/g, '');
+    
+    // Format with spaces
+    let formatted = '';
+    for (let i = 0; i < rawValue.length; i++) {
+      if (i > 0 && i % 4 === 0) {
+        formatted += ' ';
+      }
+      formatted += rawValue[i];
+    }
+    
+    // Update the form state
     setCardForm({
       ...cardForm,
-      cardNumber: formatted.substring(0, 19) // Limit to 16 digits + 3 spaces
+      cardNumber: formatted
     });
   };
   
@@ -610,14 +716,40 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
           throw new Error(response.error || 'Failed to cancel subscription');
         }
         
-        // Refresh user data to reflect the cancellation
+        // First refresh subscription data to get latest status
+        const refreshResponse = await subscriptionService.refreshSubscriptionData();
+        
+        // Then refresh the full user profile to ensure everything is updated
         const refreshedUser = await authService.getCurrentUser();
         if (refreshedUser) {
           setUser(refreshedUser);
         }
         
         setShowCancelModal(false);
-        setSuccess('Successfully cancelled your subscription. You can continue to use your plan until the end of your billing cycle.');
+        setSuccess('Your subscription has been successfully canceled. You will have access until the end of your billing period on ' + formatDate(nextBillingDate));
+        
+        // Force refresh the subscription usage data
+        if (typeof loadingUsage === 'function') {
+          loadingUsage(true);
+          try {
+            const usageResponse = await subscriptionService.getSubscriptionUsage();
+            if (usageResponse.success) {
+              // If component receives setSubscriptionUsage as prop
+              if (typeof setSubscriptionUsage === 'function') {
+                setSubscriptionUsage(usageResponse.usage);
+              } else {
+                console.log('Usage data refreshed, but setSubscriptionUsage not available:', usageResponse.usage);
+              }
+            }
+          } catch (usageError) {
+            console.error('Failed to refresh usage after cancellation:', usageError);
+          } finally {
+            if (typeof loadingUsage === 'function') {
+              loadingUsage(false);
+            }
+          }
+        }
+        
       } catch (error) {
         setError('Failed to cancel subscription. Please try again.');
         console.error('Cancel subscription error:', error);
@@ -883,9 +1015,15 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
               <h2 className="text-xl font-bold">{currentPlan}</h2>
             </div>
             <span className={`${
-              planStatus === 'active' ? 'bg-green-500/20 text-green-500' : 'bg-yellow-500/20 text-yellow-500'
+              subscription.cancelAtPeriodEnd || subscription.isCanceled
+                ? 'bg-red-500/20 text-red-500' 
+                : planStatus === 'active' 
+                  ? 'bg-green-500/20 text-green-500' 
+                  : 'bg-yellow-500/20 text-yellow-500'
             } px-3 py-1 rounded-full text-sm font-medium`}>
-              {planStatus === 'active' ? 'Active' : 'Inactive'}
+              {subscription.cancelAtPeriodEnd || subscription.isCanceled
+                ? 'Canceled'
+                : planStatus === 'active' ? 'Active' : 'Inactive'}
             </span>
           </div>
           
@@ -901,8 +1039,15 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
             </div>
             
             <div className="bg-gray-800 p-4 rounded-lg">
-              <p className="text-gray-400 text-sm mb-1">Next Billing Date</p>
-              <p className="text-lg font-medium text-white">{formatDate(nextBillingDate)}</p>
+              <p className="text-gray-400 text-sm mb-1">{subscription.cancelAtPeriodEnd || subscription.isCanceled ? 'Access Until' : 'Next Billing Date'}</p>
+              <p className="text-lg font-medium text-white">
+                {formatDate(nextBillingDate)}
+                {(subscription.cancelAtPeriodEnd || subscription.isCanceled) && 
+                  <span className="block text-xs text-red-400 mt-1">
+                    Your subscription will end on this date
+                  </span>
+                }
+              </p>
             </div>
             
             <div className="bg-gray-800 p-4 rounded-lg">
@@ -938,7 +1083,17 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
             </p>
           </div>
           
-          {!isFreePlan && (
+          {/* Show different action buttons based on subscription status */}
+          {(subscription.cancelAtPeriodEnd || subscription.isCanceled) ? (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6">
+              <p className="text-red-400 mb-2">
+                <span className="font-medium">Your subscription has been canceled</span> but you still have access until the end of your billing period.
+              </p>
+              <p className="text-sm text-gray-400">
+                Want to stay with us? You can resubscribe below.
+              </p>
+            </div>
+          ) : !isFreePlan ? (
             <div className="flex space-x-4">
               <button
                 onClick={() => setShowPlanModal(true)}
@@ -954,9 +1109,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
                 Cancel
               </button>
             </div>
-          )}
-          
-          {isFreePlan && (
+          ) : (
             <button
               onClick={() => setShowPlanModal(true)}
               className="w-full bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-4 rounded-xl hover:opacity-90 transition-colors"
@@ -987,41 +1140,172 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
             <h2 className="text-xl font-bold">Google Account</h2>
           </div>
           
-          <div className="bg-gray-800 p-6 rounded-xl mb-8">
-            <div className="flex items-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-8 w-8 text-white mr-4">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              <div>
-                <h3 className="text-lg font-semibold text-white">You're signed in with Google</h3>
-                <p className="text-gray-400 mt-1">
-                  You can set a password below to also log in with email.
-                </p>
-                <a
-                  href="https://myaccount.google.com/security"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-tiktok-blue hover:underline inline-flex items-center mt-3"
-                >
-                  Manage your Google Account
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
-                  </svg>
-                </a>
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-gray-800 p-6 rounded-xl mb-8">
+              <div className="flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-8 w-8 text-white mr-4">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                </svg>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">You're signed in with Google</h3>
+                  <p className="text-gray-400 mt-1">
+                    You can set a password below to also log in with email.
+                  </p>
+                  <a
+                    href="https://myaccount.google.com/security"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-tiktok-blue hover:underline inline-flex items-center mt-3"
+                  >
+                    Manage your Google Account
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 ml-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </a>
+                </div>
               </div>
             </div>
+            
+            <div className="flex items-center mb-6">
+              <IoKeyOutline className="text-tiktok-pink text-2xl mr-3" />
+              <h3 className="text-lg font-bold">Set Password for Email Login</h3>
+            </div>
+            
+            <form onSubmit={handleChangePassword}>
+              <div className="space-y-6">
+                <div>
+                  <label className="flex items-center text-white text-sm font-medium mb-2">
+                    <IoLockClosedOutline className="mr-2 text-tiktok-pink" />
+                    New Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      name="newPassword"
+                      value={passwordForm.newPassword}
+                      onChange={handlePasswordChange}
+                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                      required
+                      minLength={6}
+                      placeholder="Enter new password"
+                    />
+                    <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1 ml-1">
+                    Minimum 6 characters
+                  </p>
+                </div>
+                
+                <div>
+                  <label className="flex items-center text-white text-sm font-medium mb-2">
+                    <IoLockClosedOutline className="mr-2 text-tiktok-pink" />
+                    Confirm New Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      name="confirmPassword"
+                      value={passwordForm.confirmPassword}
+                      onChange={handlePasswordChange}
+                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                      required
+                      minLength={6}
+                      placeholder="Confirm new password"
+                    />
+                    <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
+                  </div>
+                  {passwordForm.newPassword !== passwordForm.confirmPassword && 
+                  passwordForm.confirmPassword && (
+                    <p className="flex items-center text-red-500 text-sm mt-1 ml-1">
+                      <IoAlertCircleOutline className="mr-1" />
+                      Passwords don't match
+                    </p>
+                  )}
+                </div>
+              </div>
+              
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center shadow-lg"
+                  disabled={loading || (passwordForm.newPassword !== passwordForm.confirmPassword)}
+                >
+                  {loading ? (
+                    <>
+                      <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
+                      Setting...
+                    </>
+                  ) : (
+                    <>
+                      <IoKeyOutline className="mr-2" />
+                      Set Password
+                    </>
+                  )}
+                </button>
+              </div>
+              
+              <p className="text-gray-400 text-sm mt-4">
+                After setting a password, you will be able to log in using either Google or your email and password.
+              </p>
+            </form>
           </div>
-          
-          <div className="flex items-center mb-6">
-            <IoKeyOutline className="text-tiktok-pink text-2xl mr-3" />
-            <h3 className="text-lg font-bold">Set Password for Email Login</h3>
-          </div>
+        </div>
+      );
+    }
+    
+    return (
+      <div className="bg-tiktok-dark rounded-xl p-8">
+        <div className="flex items-center mb-6">
+          <IoLockClosedOutline className="text-tiktok-pink text-3xl mr-4" />
+          <h2 className="text-xl font-bold">Change Password</h2>
+        </div>
+        
+        <div className="max-w-3xl mx-auto">
+          {isGoogleUser && hasPassword && (
+            <div className="bg-gray-800 p-6 rounded-xl mb-8">
+              <div className="flex items-center">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-8 w-8 text-white mr-4">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                </svg>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Connected Google Account</h3>
+                  <p className="text-gray-400 mt-1">
+                    You can log in with either Google or your email and password.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           
           <form onSubmit={handleChangePassword}>
             <div className="space-y-6">
+              {!isGoogleUser && (
+                <div>
+                  <label className="flex items-center text-white text-sm font-medium mb-2">
+                    <IoKeyOutline className="mr-2 text-tiktok-pink" />
+                    Current Password
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      name="currentPassword"
+                      value={passwordForm.currentPassword}
+                      onChange={handlePasswordChange}
+                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                      required
+                      placeholder="Enter current password"
+                    />
+                    <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
+                  </div>
+                </div>
+              )}
+              
               <div>
                 <label className="flex items-center text-white text-sm font-medium mb-2">
                   <IoLockClosedOutline className="mr-2 text-tiktok-pink" />
@@ -1064,7 +1348,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
                   <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
                 </div>
                 {passwordForm.newPassword !== passwordForm.confirmPassword && 
-                passwordForm.confirmPassword && (
+                 passwordForm.confirmPassword && (
                   <p className="flex items-center text-red-500 text-sm mt-1 ml-1">
                     <IoAlertCircleOutline className="mr-1" />
                     Passwords don't match
@@ -1082,145 +1366,18 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
                 {loading ? (
                   <>
                     <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
-                    Setting...
+                    Changing...
                   </>
                 ) : (
                   <>
                     <IoKeyOutline className="mr-2" />
-                    Set Password
+                    Change Password
                   </>
                 )}
               </button>
             </div>
-            
-            <p className="text-gray-400 text-sm mt-4">
-              After setting a password, you will be able to log in using either Google or your email and password.
-            </p>
           </form>
         </div>
-      );
-    }
-    
-    return (
-      <div className="bg-tiktok-dark rounded-xl p-8">
-        <div className="flex items-center mb-6">
-          <IoLockClosedOutline className="text-tiktok-pink text-3xl mr-4" />
-          <h2 className="text-xl font-bold">Change Password</h2>
-        </div>
-        
-        {isGoogleUser && hasPassword && (
-          <div className="bg-gray-800 p-6 rounded-xl mb-8">
-            <div className="flex items-center">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="h-8 w-8 text-white mr-4">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              <div>
-                <h3 className="text-lg font-semibold text-white">Connected Google Account</h3>
-                <p className="text-gray-400 mt-1">
-                  You can log in with either Google or your email and password.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-        
-        <form onSubmit={handleChangePassword}>
-          <div className="space-y-6">
-            {!isGoogleUser && (
-              <div>
-                <label className="flex items-center text-white text-sm font-medium mb-2">
-                  <IoKeyOutline className="mr-2 text-tiktok-pink" />
-                  Current Password
-                </label>
-                <div className="relative">
-                  <input
-                    type="password"
-                    name="currentPassword"
-                    value={passwordForm.currentPassword}
-                    onChange={handlePasswordChange}
-                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                    required
-                    placeholder="Enter current password"
-                  />
-                  <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
-                </div>
-              </div>
-            )}
-            
-            <div>
-              <label className="flex items-center text-white text-sm font-medium mb-2">
-                <IoLockClosedOutline className="mr-2 text-tiktok-pink" />
-                New Password
-              </label>
-              <div className="relative">
-                <input
-                  type="password"
-                  name="newPassword"
-                  value={passwordForm.newPassword}
-                  onChange={handlePasswordChange}
-                  className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                  required
-                  minLength={6}
-                  placeholder="Enter new password"
-                />
-                <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
-              </div>
-              <p className="text-xs text-gray-500 mt-1 ml-1">
-                Minimum 6 characters
-              </p>
-            </div>
-            
-            <div>
-              <label className="flex items-center text-white text-sm font-medium mb-2">
-                <IoLockClosedOutline className="mr-2 text-tiktok-pink" />
-                Confirm New Password
-              </label>
-              <div className="relative">
-                <input
-                  type="password"
-                  name="confirmPassword"
-                  value={passwordForm.confirmPassword}
-                  onChange={handlePasswordChange}
-                  className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                  required
-                  minLength={6}
-                  placeholder="Confirm new password"
-                />
-                <IoLockClosedOutline className="absolute right-3 top-3 h-5 w-5 text-gray-400" />
-              </div>
-              {passwordForm.newPassword !== passwordForm.confirmPassword && 
-               passwordForm.confirmPassword && (
-                <p className="flex items-center text-red-500 text-sm mt-1 ml-1">
-                  <IoAlertCircleOutline className="mr-1" />
-                  Passwords don't match
-                </p>
-              )}
-            </div>
-          </div>
-          
-          <div className="mt-6">
-            <button
-              type="submit"
-              className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center shadow-lg"
-              disabled={loading || (passwordForm.newPassword !== passwordForm.confirmPassword)}
-            >
-              {loading ? (
-                <>
-                  <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
-                  Changing...
-                </>
-              ) : (
-                <>
-                  <IoKeyOutline className="mr-2" />
-                  Change Password
-                </>
-              )}
-            </button>
-          </div>
-        </form>
       </div>
     );
   };
@@ -1231,6 +1388,163 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
     const formatDate = (dateString) => {
       if (!dateString) return 'N/A';
       return new Date(dateString).toLocaleDateString();
+    };
+    
+    // Generate and download receipt as PDF
+    const generateReceipt = (payment) => {
+      // Create the receipt content
+      const receiptContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Receipt - ${formatDate(payment.date)}</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              margin: 0;
+              padding: 20px;
+              color: #333;
+            }
+            .receipt {
+              max-width: 800px;
+              margin: 0 auto;
+              border: 1px solid #ddd;
+              padding: 30px;
+              box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            }
+            .header {
+              text-align: center;
+              padding-bottom: 20px;
+              border-bottom: 2px solid #f0f0f0;
+              margin-bottom: 20px;
+            }
+            .logo {
+              font-size: 24px;
+              font-weight: bold;
+              color: #ff0050; /* TikTok pink */
+              margin-bottom: 10px;
+            }
+            .receipt-id {
+              font-size: 14px;
+              color: #777;
+              margin-bottom: 5px;
+            }
+            .receipt-date {
+              font-size: 14px;
+              color: #777;
+            }
+            .customer-info {
+              margin-bottom: 20px;
+            }
+            .info-row {
+              display: flex;
+              margin-bottom: 10px;
+            }
+            .info-label {
+              width: 120px;
+              font-weight: bold;
+            }
+            .info-value {
+              flex: 1;
+            }
+            .items {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 20px;
+            }
+            .items th {
+              background-color: #f5f5f5;
+              text-align: left;
+              padding: 10px;
+              border-bottom: 1px solid #ddd;
+            }
+            .items td {
+              padding: 10px;
+              border-bottom: 1px solid #ddd;
+            }
+            .total-row {
+              font-weight: bold;
+            }
+            .footer {
+              margin-top: 40px;
+              text-align: center;
+              font-size: 12px;
+              color: #777;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="receipt">
+            <div class="header">
+              <div class="logo">AI Video Generator</div>
+              <div class="receipt-id">Receipt #${payment.id || 'N/A'}</div>
+              <div class="receipt-date">Date: ${formatDate(payment.date)}</div>
+            </div>
+            
+            <div class="customer-info">
+              <div class="info-row">
+                <div class="info-label">Customer:</div>
+                <div class="info-value">${user?.name || 'N/A'}</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Email:</div>
+                <div class="info-value">${user?.email || 'N/A'}</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Payment ID:</div>
+                <div class="info-value">${payment.id || 'N/A'}</div>
+              </div>
+              <div class="info-row">
+                <div class="info-label">Status:</div>
+                <div class="info-value">${payment.status === 'succeeded' ? 'Paid' : 'Pending'}</div>
+              </div>
+            </div>
+            
+            <table class="items">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Plan</th>
+                  <th>Price</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>AI Video Generator Subscription</td>
+                  <td>${payment.plan || 'N/A'}</td>
+                  <td>$${payment.amount?.toFixed(2) || '0.00'}</td>
+                </tr>
+                <tr class="total-row">
+                  <td colspan="2">Total</td>
+                  <td>$${payment.amount?.toFixed(2) || '0.00'}</td>
+                </tr>
+              </tbody>
+            </table>
+            
+            <div class="footer">
+              <p>Thank you for your business!</p>
+              <p>For questions or concerns regarding this receipt, please contact support@aivideos.com</p>
+              <p>© ${new Date().getFullYear()} AI Video Generator, Inc. All rights reserved.</p>
+            </div>
+          </div>
+        </body>
+        </html>
+      `;
+      
+      // Convert HTML to data URL
+      const blob = new Blob([receiptContent], { type: 'text/html' });
+      const dataUrl = URL.createObjectURL(blob);
+      
+      // Create a temporary link to download the file
+      const downloadLink = document.createElement('a');
+      downloadLink.href = dataUrl;
+      downloadLink.download = `receipt-${payment.id || formatDate(payment.date)}.html`;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      
+      // Clean up the URL object
+      setTimeout(() => URL.revokeObjectURL(dataUrl), 100);
     };
     
     // Get current plan details from either subscriptionUsage or user object
@@ -1259,142 +1573,256 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
     ];
     
     // Modal for adding a payment method
-    const AddCardModal = () => (
-      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
-        <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold">Add Payment Method</h2>
-            <button 
-              onClick={() => setShowAddCardModal(false)}
-              className="text-gray-400 hover:text-white transition-colors"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+    const AddCardModal = () => {
+      const cardNumberRef = useRef();
+      const expiryMonthRef = useRef();
+      const expiryYearRef = useRef();
+      const cvcRef = useRef();
+      const nameOnCardRef = useRef();
+      
+      const handleCardFormSubmit = async (e) => {
+        e.preventDefault();
+        setProcessingCard(true);
+        setError('');
+        
+        try {
+          // Debug user data
+          console.log('Current user state:', user ? { 
+            hasToken: !!user.token,
+            tokenLength: user.token ? user.token.length : 0,
+            id: user._id,
+            email: user.email
+          } : 'No user');
           
-          <form onSubmit={handleSaveCard}>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-white text-sm font-medium mb-2">
-                  Card Number
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    name="cardNumber"
-                    value={cardForm.cardNumber}
-                    onChange={handleCardNumberChange}
-                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                    required
-                    placeholder="1234 5678 9012 3456"
-                    maxLength={19}
-                  />
-                  <svg className="absolute right-3 top-3 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
-                    <line x1="1" y1="10" x2="23" y2="10"></line>
-                  </svg>
-                </div>
-              </div>
+          // Get values directly from refs
+          const formData = {
+            cardNumber: cardNumberRef.current.value.replace(/\s/g, ''),
+            expiryMonth: expiryMonthRef.current.value,
+            expiryYear: expiryYearRef.current.value,
+            cvc: cvcRef.current.value,
+            nameOnCard: nameOnCardRef.current.value
+          };
+          
+          // Try to get fresh user data directly from localStorage, ignore any passed user prop
+          let tokenFromStorage = null;
+          try {
+            const storedUserData = localStorage.getItem('user');
+            if (storedUserData) {
+              const parsedData = JSON.parse(storedUserData);
+              if (parsedData && parsedData.token) {
+                console.log('Found token in localStorage with length:', parsedData.token.length);
+                tokenFromStorage = parsedData.token;
+              }
+            }
+          } catch (err) {
+            console.error('Error parsing user from localStorage:', err);
+          }
+          
+          // If we have a token from storage, use it directly
+          if (tokenFromStorage) {
+            console.log('Using token directly from localStorage');
+            
+            // Call API with the form data and token from storage
+            const response = await savePaymentMethod(formData, tokenFromStorage);
+            
+            // Handle success
+            setSuccess('Payment method added successfully!');
+            setShowAddCardModal(false);
+            
+            // Update the user object with the returned payment method
+            let updatedUserData;
+            try {
+              // Get the full user data from localStorage again
+              const fullUserData = JSON.parse(localStorage.getItem('user'));
               
-              <div className="grid grid-cols-3 gap-4">
+              // Create updated user data
+              updatedUserData = { 
+                ...fullUserData, 
+                paymentMethod: response.paymentMethod || {
+                  last4: formData.cardNumber.slice(-4),
+                  brand: 'visa',
+                  expMonth: formData.expiryMonth,
+                  expYear: formData.expiryYear
+                } 
+              };
+              
+              // Update localStorage with the updated user data
+              localStorage.setItem('user', JSON.stringify(updatedUserData));
+              
+              // Update React state with the updated user data
+              setUser(updatedUserData);
+            } catch (updateError) {
+              console.error('Error updating user data:', updateError);
+              // Continue since the payment went through
+            }
+            
+            return; // Exit early since we succeeded
+          }
+          
+          // If we get here, we don't have a token from localStorage
+          throw new Error('Unable to find your authentication token. Please try logging out and logging back in.');
+        } catch (error) {
+          console.error('Payment error:', error);
+          
+          // Handle different types of errors
+          if (error.message && error.message.includes('Authentication')) {
+            setError(`Authentication error: ${error.message}. Try logging out and back in.`);
+          } else if (error.response && error.response.status === 401) {
+            setError('Your session has expired. Please log out and log back in to continue.');
+          } else {
+            setError(typeof error === 'string' ? error : (error.message || 'Failed to add payment method. Please try again.'));
+          }
+        } finally {
+          setProcessingCard(false);
+        }
+      };
+      
+      // Format card number with spaces as user types
+      const formatCardNumber = (e) => {
+        let value = e.target.value.replace(/\s/g, '').substring(0, 16);
+        if (value.length > 0) {
+          value = value.match(new RegExp('.{1,4}', 'g')).join(' ');
+        }
+        e.target.value = value;
+      };
+      
+      // Only allow digits for numeric fields
+      const ensureNumeric = (e) => {
+        const value = e.target.value.replace(/\D/g, '');
+        e.target.value = value;
+      };
+      
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
+          <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-bold">Add Payment Method</h2>
+              <button 
+                onClick={() => setShowAddCardModal(false)}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <form onSubmit={handleCardFormSubmit}>
+              <div className="space-y-4">
                 <div>
                   <label className="block text-white text-sm font-medium mb-2">
-                    Month
-                  </label>
-                  <input
-                    type="text"
-                    name="expiryMonth"
-                    value={cardForm.expiryMonth}
-                    onChange={handleCardChange}
-                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                    required
-                    placeholder="MM"
-                    maxLength={2}
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-white text-sm font-medium mb-2">
-                    Year
-                  </label>
-                  <input
-                    type="text"
-                    name="expiryYear"
-                    value={cardForm.expiryYear}
-                    onChange={handleCardChange}
-                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                    required
-                    placeholder="YY"
-                    maxLength={2}
-                  />
-                </div>
-                
-                <div>
-                  <label className="block text-white text-sm font-medium mb-2">
-                    CVC
+                    Card Number
                   </label>
                   <div className="relative">
                     <input
                       type="text"
-                      name="cvc"
-                      value={cardForm.cvc}
-                      onChange={handleCardChange}
+                      ref={cardNumberRef}
+                      onInput={formatCardNumber}
                       className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
                       required
-                      placeholder="123"
-                      maxLength={3}
+                      placeholder="1234 5678 9012 3456"
+                      maxLength={19}
                     />
-                    <svg className="absolute right-3 top-3 h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M12 2a10 10 0 100 20 10 10 0 000-20z"></path>
-                      <path d="M12 16v-4"></path>
-                      <path d="M12 8h.01"></path>
+                    <svg className="absolute right-3 top-3 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
+                      <line x1="1" y1="10" x2="23" y2="10"></line>
                     </svg>
                   </div>
                 </div>
+                
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-white text-sm font-medium mb-2">
+                      Month
+                    </label>
+                    <input
+                      type="text"
+                      ref={expiryMonthRef}
+                      onInput={ensureNumeric}
+                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                      required
+                      placeholder="MM"
+                      maxLength={2}
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-white text-sm font-medium mb-2">
+                      Year
+                    </label>
+                    <input
+                      type="text"
+                      ref={expiryYearRef}
+                      onInput={ensureNumeric}
+                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                      required
+                      placeholder="YY"
+                      maxLength={2}
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-white text-sm font-medium mb-2">
+                      CVC
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        ref={cvcRef}
+                        onInput={ensureNumeric}
+                        className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                        required
+                        placeholder="123"
+                        maxLength={3}
+                      />
+                      <svg className="absolute right-3 top-3 h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 2a10 10 0 100 20 10 10 0 000-20z"></path>
+                        <path d="M12 16v-4"></path>
+                        <path d="M12 8h.01"></path>
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-white text-sm font-medium mb-2">
+                    Name on Card
+                  </label>
+                  <input
+                    type="text"
+                    ref={nameOnCardRef}
+                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                    required
+                    placeholder="John Doe"
+                  />
+                </div>
               </div>
               
-              <div>
-                <label className="block text-white text-sm font-medium mb-2">
-                  Name on Card
-                </label>
-                <input
-                  type="text"
-                  name="nameOnCard"
-                  value={cardForm.nameOnCard}
-                  onChange={handleCardChange}
-                  className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                  required
-                  placeholder="John Doe"
-                />
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center w-full"
+                  disabled={processingCard}
+                >
+                  {processingCard ? (
+                    <>
+                      <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    'Save Card'
+                  )}
+                </button>
               </div>
-            </div>
-            
-            <div className="mt-6">
-              <button
-                type="submit"
-                className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center w-full"
-                disabled={processingCard}
-              >
-                {processingCard ? (
-                  <>
-                    <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
-                    Processing...
-                  </>
-                ) : (
-                  'Save Card'
-                )}
-              </button>
-            </div>
-            
-            <p className="text-gray-400 text-xs text-center mt-4">
-              Your card information is securely processed. We don't store your full card details.
-            </p>
-          </form>
+              
+              <p className="text-gray-400 text-xs text-center mt-4">
+                Your card information is securely processed. We don't store your full card details.
+              </p>
+            </form>
+          </div>
         </div>
-      </div>
-    );
+      );
+    };
     
     // Confirmation modal for deleting payment method
     const DeletePaymentMethodModal = () => (
@@ -1490,24 +1918,24 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
           <h2 className="text-xl font-bold mb-6">Payment History</h2>
           
           {paymentHistory.length > 0 ? (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto rounded-lg border border-gray-700">
               <table className="min-w-full divide-y divide-gray-800">
-                <thead>
+                <thead className="bg-gray-900/50">
                   <tr>
-                    <th className="py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
-                    <th className="py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Amount</th>
-                    <th className="py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Plan</th>
-                    <th className="py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
-                    <th className="py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Receipt</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Amount</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Plan</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Receipt</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-800">
+                <tbody className="bg-gray-800/30 divide-y divide-gray-800">
                   {paymentHistory.map((payment, idx) => (
-                    <tr key={payment.id || idx}>
-                      <td className="py-4 text-sm">{formatDate(payment.date)}</td>
-                      <td className="py-4 text-sm">${payment.amount}</td>
-                      <td className="py-4 text-sm">{payment.plan}</td>
-                      <td className="py-4 text-sm">
+                    <tr key={payment.id || idx} className="hover:bg-gray-800">
+                      <td className="px-4 py-4 text-sm">{formatDate(payment.date)}</td>
+                      <td className="px-4 py-4 text-sm">${payment.amount}</td>
+                      <td className="px-4 py-4 text-sm">{payment.plan}</td>
+                      <td className="px-4 py-4 text-sm">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           payment.status === 'succeeded' 
                             ? 'bg-green-500/20 text-green-500' 
@@ -1516,8 +1944,11 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
                           {payment.status === 'succeeded' ? 'Paid' : 'Pending'}
                         </span>
                       </td>
-                      <td className="py-4 text-sm text-right">
-                        <button className="text-tiktok-blue hover:text-tiktok-pink transition-colors">
+                      <td className="px-4 py-4 text-sm text-right">
+                        <button 
+                          onClick={() => generateReceipt(payment)}
+                          className="text-tiktok-blue hover:text-tiktok-pink transition-colors"
+                        >
                           Download
                         </button>
                       </td>
@@ -1845,10 +2276,34 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage }) => {
         {activeTab === 'password' && renderPasswordTab()}
         
         {/* Subscription Tab */}
-        {activeTab === 'subscription' && renderSubscriptionTab()}
+        {activeTab === 'subscription' && (
+          <div className="bg-tiktok-dark rounded-xl p-8">
+            <div className="flex items-center mb-6">
+              <IoShieldOutline className="text-tiktok-pink text-3xl mr-4" />
+              <h2 className="text-xl font-bold">Subscription</h2>
+            </div>
+            
+            <div className="max-w-3xl mx-auto">
+              {renderSubscriptionTab()}
+            </div>
+          </div>
+        )}
         
         {/* Payment Tab */}
-        {activeTab === 'payment' && renderPaymentTab()}
+        {activeTab === 'payment' && (
+          <div className="bg-tiktok-dark rounded-xl p-8">
+            <div className="flex items-center mb-6">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-tiktok-pink h-7 w-7 mr-3">
+                <path fill="currentColor" d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
+              </svg>
+              <h2 className="text-xl font-bold">Payment Methods</h2>
+            </div>
+            
+            <div className="max-w-3xl mx-auto">
+              {renderPaymentTab()}
+            </div>
+          </div>
+        )}
         
         {/* Danger Zone */}
         {activeTab === 'danger' && (

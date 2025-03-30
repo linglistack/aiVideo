@@ -569,10 +569,10 @@ const LandingPage = () => {
             </div>
             
             <div className="flex space-x-6">
-              <a href="#" className="text-gray-400 hover:text-white transition-colors">Terms</a>
-              <a href="#" className="text-gray-400 hover:text-white transition-colors">Privacy</a>
-              <a href="#" className="text-gray-400 hover:text-white transition-colors">Help</a>
-              <a href="#" className="text-gray-400 hover:text-white transition-colors">Contact</a>
+              <Link to="/terms" className="text-gray-400 hover:text-white transition-colors">Terms</Link>
+              <Link to="/privacy" className="text-gray-400 hover:text-white transition-colors">Privacy</Link>
+              <Link to="/help" className="text-gray-400 hover:text-white transition-colors">Help</Link>
+              <Link to="/contact" className="text-gray-400 hover:text-white transition-colors">Contact</Link>
             </div>
           </div>
           <div className="text-center mt-6 text-gray-500 text-sm">

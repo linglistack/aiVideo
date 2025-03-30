@@ -12,6 +12,10 @@ import Register from './components/Auth/Register';
 import Dashboard from './components/Dashboard/Dashboard';
 import VideoGenerator from './components/VideoGenerator/VideoGenerator';
 import Support from './components/Support/Support';
+import Terms from './components/Legal/Terms';
+import Privacy from './components/Legal/Privacy';
+import Help from './components/Help/Help';
+import Contact from './components/Contact/Contact';
 import { getCurrentUser, logout, getProfile } from './services/authService';
 import Pricing from './components/Pricing/Pricing';
 import PaymentForm from './components/PaymentForm/PaymentForm';
@@ -285,22 +289,30 @@ const AppContent = ({ user, setUser, handleLogout }) => {
   
   // Don't add margin on the homepage
   const isHomePage = location.pathname === '/';
+  const isPublicPage = ['/terms', '/privacy', '/help', '/contact'].includes(location.pathname);
   
   if (!user && location.pathname !== '/' && 
       location.pathname !== '/login' && 
       location.pathname !== '/register' &&
       location.pathname !== '/pricing' &&
-      location.pathname !== '/product') {
+      location.pathname !== '/product' &&
+      location.pathname !== '/terms' &&
+      location.pathname !== '/privacy' &&
+      location.pathname !== '/help' &&
+      location.pathname !== '/contact') {
     return <Navigate to="/login" />;
   }
   
   return (
     <div className="min-h-screen bg-black text-white">
-      {((!user) || (user && isHomePage))&&<Navbar user={user} />}
+      {((!user) || (user && isHomePage) || (isPublicPage && !user)) && <Navbar user={user} />}
       <Sidebar user={user} onLogout={handleLogout} />
       
-      {/* Main content area - no sidebar margin on homepage */}
-      <div className={`${user && !isHomePage ? 'ml-64' : ''} pt-16`}>
+      {/* Main content area - adjust sidebar margin based on page and login status */}
+      <div className={`
+        ${user && !isHomePage ? 'ml-64' : ''} 
+        ${(!user || isHomePage) ? 'pt-16' : ''}
+      `}>
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={
@@ -313,30 +325,30 @@ const AppContent = ({ user, setUser, handleLogout }) => {
             user ? <DashboardWithRefresh user={user} setUser={setUser} /> : <Navigate to="/login" />
           } />
           <Route path="/create" element={
-            user ? <VideoGenerator user={user} /> : <Navigate to="/login" />
+            user ? <VideoGenerator /> : <Navigate to="/login" />
           } />
           <Route path="/ugc-avatars" element={
             user ? <div className="p-6">
               <h1 className="text-3xl font-bold mb-6">AI UGC Avatars</h1>
-              <p>Create and manage your AI UGC avatars here</p>
+              <p>Browse and select from our library of 200+ AI avatars</p>
             </div> : <Navigate to="/login" />
           } />
           <Route path="/ugc-ads" element={
             user ? <div className="p-6">
               <h1 className="text-3xl font-bold mb-6">AI UGC Ads</h1>
-              <p>Create and manage your AI UGC ads here</p>
+              <p>Create user-generated content ads with AI</p>
             </div> : <Navigate to="/login" />
           } />
           <Route path="/greenscreen-memes" element={
             user ? <div className="p-6">
               <h1 className="text-3xl font-bold mb-6">Greenscreen Memes</h1>
-              <p>Create viral meme content with greenscreen effects</p>
+              <p>Create engaging greenscreen meme videos</p>
             </div> : <Navigate to="/login" />
           } />
           <Route path="/schedule" element={
             user ? <div className="p-6">
               <h1 className="text-3xl font-bold mb-6">Content Schedule</h1>
-              <p>Plan and schedule your content calendar</p>
+              <p>Plan and schedule your TikTok content</p>
             </div> : <Navigate to="/login" />
           } />
           <Route path="/campaigns" element={
@@ -345,9 +357,7 @@ const AppContent = ({ user, setUser, handleLogout }) => {
               <p>Manage your marketing campaigns</p>
             </div> : <Navigate to="/login" />
           } />
-          <Route path="/support" element={
-            user ? <Support /> : <Navigate to="/login" />
-          } />
+          <Route path="/support" element={<Support />} />
           <Route path="/product" element={<LandingPage />} />
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/payment" element={
@@ -359,6 +369,12 @@ const AppContent = ({ user, setUser, handleLogout }) => {
           <Route path="/account/billing" element={
             user ? <BillingPortalRedirect /> : <Navigate to="/login" />
           } />
+          
+          {/* New routes for Terms, Privacy, Help, and Contact */}
+          <Route path="/terms" element={<Terms />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/help" element={<Help />} />
+          <Route path="/contact" element={<Contact />} />
         </Routes>
       </div>
     </div>

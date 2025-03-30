@@ -73,106 +73,49 @@ const THROTTLE_MS = 1000; // Only allow one call per second
 // Get user profile
 const getProfile = async () => {
   try {
-    // Throttle to prevent too many calls in quick succession 
-    const now = Date.now();
-    if (now - lastProfileCall < THROTTLE_MS) {
+    const user = getCurrentUser();
+    
+    if (!user || !user.token) {
       return {
         success: false,
-        error: 'Too many profile requests. Please try again shortly.',
-        throttled: true
+        error: 'Not authenticated'
       };
     }
     
-    lastProfileCall = now;
+    console.log('Fetching profile with token:', user.token.substring(0, 10) + '...');
     
-    const user = JSON.parse(localStorage.getItem('user'));
-    
-    if (!user) {
-      console.error('Get profile error: No user found in localStorage');
-      return {
-        success: false,
-        error: 'Not logged in'
-      };
-    }
-    
-    if (!user.token) {
-      console.error('Get profile error: No token found for user');
-      return {
-        success: false,
-        error: 'Authentication token missing'
-      };
-    }
-    
-    const config = {
+    const response = await axios.get(`${API_URL}/profile`, {
       headers: {
-        Authorization: `Bearer ${user.token}`,
-      },
-    };
-    
-    // Only log this in development env
-    if (process.env.NODE_ENV === 'development') {
-      console.log('Requesting user profile with token', { userId: user._id });
-    }
-    
-    // Add timeout to prevent hanging requests
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-    
-    try {
-      const response = await axios.get(`${API_URL}/profile`, {
-        ...config,
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeoutId);
-      
-      // If we get a new token, add it to the response
-      if (response.data.success && !response.data.token) {
-        response.data.token = user.token; // Provide existing token if no new one
+        Authorization: `Bearer ${user.token}`
       }
-      
-      return response.data;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error; // Re-throw to be caught by outer catch
-    }
-  } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      console.error('Get profile error:', error.response?.data || error.message);
-    }
+    });
     
-    // Handle abort errors
-    if (error.name === 'AbortError') {
-      console.error('Profile request timed out');
+    if (response.data.success) {
+      // Make sure payment method data is preserved in localStorage
+      const currentUser = getCurrentUser();
+      
+      // Merge the new user data with any existing payment method data
+      const updatedUser = {
+        ...response.data.user,
+        token: user.token, // Keep the current token
+        paymentMethod: response.data.user.paymentMethod || currentUser?.paymentMethod // Keep payment method data
+      };
+      
+      // Update localStorage with the merged data
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      
       return {
-        success: false,
-        error: 'Request timed out. Please try again.'
+        success: true,
+        user: updatedUser
       };
     }
     
-    // Provide more specific error messages
-    if (error.response) {
-      if (error.response.status === 401) {
-        return {
-          success: false,
-          error: 'Your session has expired. Please log in again.'
-        };
-      } else if (error.response.status === 404) {
-        return {
-          success: false,
-          error: 'User profile not found. Please try logging out and back in.'
-        };
-      } else if (error.response.status >= 500) {
-        return {
-          success: false,
-          error: 'Server error. Please try again later.'
-        };
-      }
-    }
-    
+    return response.data;
+  } catch (error) {
+    console.error('Error getting profile:', error);
     return {
       success: false,
-      error: error.response?.data?.error || error.message || 'Failed to load profile. Please try again.'
+      error: error.response?.data?.error || error.message || 'Failed to fetch profile'
     };
   }
 };
@@ -259,7 +202,18 @@ const decodeJWT = (token) => {
 // Refresh token and get updated user data
 const refreshToken = async () => {
   try {
-    const user = JSON.parse(localStorage.getItem('user'));
+    let user = null;
+    
+    try {
+      const userString = localStorage.getItem('user');
+      if (userString) {
+        user = JSON.parse(userString);
+      }
+    } catch (parseError) {
+      console.error('Error parsing user data from localStorage:', parseError);
+      // Clear invalid user data
+      localStorage.removeItem('user');
+    }
     
     if (!user || !user.token) {
       console.error('Cannot refresh token: No user or token found');
@@ -268,6 +222,8 @@ const refreshToken = async () => {
         error: 'No authentication token found'
       };
     }
+    
+    console.log('Attempting to refresh token...');
     
     // Call the profile endpoint which will validate the token
     const response = await axios.get(`${API_URL}/profile`, {
@@ -286,6 +242,7 @@ const refreshToken = async () => {
       
       // Update in localStorage
       localStorage.setItem('user', JSON.stringify(updatedUser));
+      console.log('Token refresh successful');
       
       return {
         success: true,
@@ -295,10 +252,13 @@ const refreshToken = async () => {
     
     return response.data;
   } catch (error) {
-    console.error('Token refresh error:', error);
+    console.error('Token refresh error:', error.response?.data || error.message || error);
     
     if (error.response?.status === 401) {
-      // Token is invalid or expired
+      // Token is invalid or expired - force re-login
+      console.log('Token expired, clearing user data');
+      localStorage.removeItem('user');
+      
       return {
         success: false,
         error: 'Your session has expired. Please log in again.',

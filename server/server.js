@@ -21,11 +21,13 @@ const authRoutes = require('./routes/authRoutes');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const videoRoutes = require('./routes/videoRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
+const contactRoutes = require('./routes/contactRoutes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/payments', paymentRoutes);
+app.use('/api/contact', contactRoutes);
 
 // Special route for Stripe webhooks (needs raw body)
 app.post('/api/subscriptions/webhook', 

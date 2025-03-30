@@ -165,7 +165,7 @@ const NavBar = ({ user, onLogout }) => {
           <Box sx={{ flexGrow: 0 }}>
             {user ? (
               <>
-                <IconButton onClick={handleOpenUserMenu} sx={{ p: 0 }}>
+                {/* <IconButton onClick={handleOpenUserMenu} sx={{ p: 0 }}>
                   <Avatar 
                     alt={user.name} 
                     src={user.avatar} 
@@ -204,28 +204,11 @@ const NavBar = ({ user, onLogout }) => {
                   <MenuItem onClick={handleLogout}>
                     <Typography textAlign="center">Logout</Typography>
                   </MenuItem>
-                </Menu>
+                </Menu> */}
               </>
             ) : (
               <>
-                {/* <Button 
-                  component={Link} 
-                  to="/login" 
-                  sx={{ color: 'inherit', mx: 1 }}
-                >
-                  Login
-                </Button>
-                <Button 
-                  component={Link} 
-                  to="/register" 
-                  variant="contained" 
-                  sx={{ 
-                    ml: 1,
-                    background: 'linear-gradient(45deg, #2196F3 30%, #21CBF3 90%)',
-                  }}
-                >
-                  Sign Up
-                </Button> */}
+               
                 <div className="space-x-4">
                 <Link to="/login" className="text-tiktok-pink hover:text-tiktok-blue transition-colors">Login</Link>
             <Link to="/register" className="bg-tiktok-pink px-4 py-2 rounded-full hover:bg-opacity-90 transition-colors">Sign Up</Link>

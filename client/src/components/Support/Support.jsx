@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import axios from 'axios';
 import { 
   IoMailOutline, 
   IoCallOutline, 
@@ -6,31 +7,63 @@ import {
   IoChatbubbleOutline, 
   IoSendOutline,
   IoChevronDownOutline,
-  IoChevronUpOutline
+  IoChevronUpOutline,
+  IoPersonOutline
 } from 'react-icons/io5';
+
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
 const Support = () => {
   const [activeTab, setActiveTab] = useState('contact');
-  const [message, setMessage] = useState('');
-  const [subject, setSubject] = useState('');
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    subject: '',
+    message: ''
+  });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState(null);
   const [expandedFaq, setExpandedFaq] = useState(null);
+
+  const handleChange = (e) => {
+    const { id, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [id]: value
+    }));
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
+    setError(null);
     
-    // Simulate API call
-    setTimeout(() => {
-      setSubmitting(false);
-      setSubmitted(true);
-      setMessage('');
-      setSubject('');
+    try {
+      // Send data to backend API
+      const response = await axios.post(`${API_URL}/contact/submit`, formData);
       
-      // Reset submitted state after 5 seconds
-      setTimeout(() => setSubmitted(false), 5000);
-    }, 1000);
+      if (response.data.success) {
+        setSubmitted(true);
+        // Reset form
+        setFormData({
+          name: '',
+          email: '',
+          subject: '',
+          message: ''
+        });
+        
+        // Reset submitted state after 5 seconds
+        setTimeout(() => setSubmitted(false), 5000);
+      } else {
+        setError(response.data.error || 'Failed to send message. Please try again.');
+      }
+    } catch (err) {
+      console.error('Error submitting contact form:', err);
+      setError(err.response?.data?.error || 'Failed to send message. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const faqItems = [
@@ -154,12 +187,48 @@ const Support = () => {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
                   </div>
-                  <h3 className="text-lg font-semibold text-white mb-2">Message Sent!</h3>
-                  <p className="text-gray-400">We've received your message and will get back to you shortly.</p>
+                  <h3 className="text-lg font-semibold text-white mb-2">Message Received!</h3>
+                  <p className="text-gray-400">Thank you for reaching out. Our team will review your message and get back to you soon.</p>
                 </div>
               ) : (
                 <form onSubmit={handleSubmit}>
                   <div className="space-y-4">
+                    <div>
+                      <label className="block text-gray-400 text-sm mb-2" htmlFor="name">
+                        <div className="flex items-center">
+                          <IoPersonOutline className="mr-2" />
+                          Your Name
+                        </div>
+                      </label>
+                      <input
+                        type="text"
+                        id="name"
+                        value={formData.name}
+                        onChange={handleChange}
+                        className="w-full bg-black border border-gray-800 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-tiktok-pink"
+                        required
+                        placeholder="Enter your name"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-gray-400 text-sm mb-2" htmlFor="email">
+                        <div className="flex items-center">
+                          <IoMailOutline className="mr-2" />
+                          Your Email
+                        </div>
+                      </label>
+                      <input
+                        type="email"
+                        id="email"
+                        value={formData.email}
+                        onChange={handleChange}
+                        className="w-full bg-black border border-gray-800 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-tiktok-pink"
+                        required
+                        placeholder="Enter your email address"
+                      />
+                    </div>
+                    
                     <div>
                       <label className="block text-gray-400 text-sm mb-2" htmlFor="subject">
                         Subject
@@ -167,10 +236,11 @@ const Support = () => {
                       <input
                         type="text"
                         id="subject"
-                        value={subject}
-                        onChange={(e) => setSubject(e.target.value)}
+                        value={formData.subject}
+                        onChange={handleChange}
                         className="w-full bg-black border border-gray-800 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-tiktok-pink"
                         required
+                        placeholder="What is your message about?"
                       />
                     </div>
                     
@@ -180,13 +250,20 @@ const Support = () => {
                       </label>
                       <textarea
                         id="message"
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
+                        value={formData.message}
+                        onChange={handleChange}
                         rows="6"
                         className="w-full bg-black border border-gray-800 rounded-lg px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-tiktok-pink"
                         required
+                        placeholder="How can we help you?"
                       ></textarea>
                     </div>
+                    
+                    {error && (
+                      <div className="bg-red-900/30 border border-red-900 text-red-200 p-3 rounded-lg text-sm">
+                        {error}
+                      </div>
+                    )}
                     
                     <button
                       type="submit"

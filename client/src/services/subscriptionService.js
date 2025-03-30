@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { getCurrentUser } from './authService';
 
-const API_URL = 'http://localhost:5000/api/subscriptions';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api/subscriptions';
 
 // Get auth header
 const getAuthHeader = () => {
@@ -217,7 +217,30 @@ const cancelSubscription = async (data = {}) => {
     }
     
     console.log('Sending cancel subscription request with auth token');
-    const response = await axios.post(`${API_URL}/cancel`, data, getAuthHeader());
+    const response = await axios.delete(`${API_URL}/cancel`, {
+      ...getAuthHeader(),
+      data: data // Send data in the request body for DELETE
+    });
+    
+    // If successful, update the local user data to reflect cancellation
+    if (response.data.success) {
+      try {
+        const currentUser = JSON.parse(localStorage.getItem('user'));
+        if (currentUser && currentUser.subscription) {
+          currentUser.subscription.isActive = false;
+          currentUser.subscription.canceledAt = new Date().toISOString();
+          currentUser.subscription.status = 'canceled';
+          currentUser.subscription.cancelAtPeriodEnd = true;
+          currentUser.subscription.isCanceled = true;
+          
+          localStorage.setItem('user', JSON.stringify(currentUser));
+          console.log('Updated local user data with subscription cancellation');
+        }
+      } catch (localStorageError) {
+        console.error('Error updating local storage after cancellation:', localStorageError);
+      }
+    }
+    
     return response.data;
   } catch (error) {
     console.error('Error canceling subscription:', error);
@@ -233,6 +256,46 @@ const cancelSubscription = async (data = {}) => {
     return {
       success: false,
       error: error.response?.data?.error || error.message || 'Failed to cancel subscription'
+    };
+  }
+};
+
+// Refresh subscription data after changes
+const refreshSubscriptionData = async () => {
+  try {
+    const user = getCurrentUser();
+    
+    if (!user || !user.token) {
+      console.error('refreshSubscriptionData: No valid user token found');
+      return {
+        success: false,
+        error: 'Authentication required. Please log in again.'
+      };
+    }
+    
+    // Get fresh subscription data
+    const response = await getSubscriptionStatus();
+    
+    // Update local storage with new subscription data
+    if (response.success && response.subscription) {
+      try {
+        const currentUser = JSON.parse(localStorage.getItem('user'));
+        if (currentUser) {
+          currentUser.subscription = response.subscription;
+          localStorage.setItem('user', JSON.stringify(currentUser));
+          console.log('Updated local user data with refreshed subscription');
+        }
+      } catch (localStorageError) {
+        console.error('Error updating local storage with refreshed subscription:', localStorageError);
+      }
+    }
+    
+    return response;
+  } catch (error) {
+    console.error('Error refreshing subscription data:', error);
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Failed to refresh subscription data'
     };
   }
 };
@@ -281,9 +344,33 @@ const createBillingPortalSession = async (returnUrl) => {
 // Get subscription usage statistics
 const getSubscriptionUsage = async () => {
   try {
-    const authHeader = getAuthHeader();
-    console.log('Requesting subscription usage with headers:', authHeader);
+    // Get fresh user data to ensure we have the latest token
+    const user = getCurrentUser();
     
+    if (!user || !user.token) {
+      console.log('getSubscriptionUsage: No authenticated user found, returning default data');
+      return {
+        success: true,
+        usage: {
+          videosUsed: 0,
+          videosLimit: 10,
+          videosRemaining: 10,
+          plan: 'free',
+          isActive: false,
+          endDate: null,
+          daysUntilReset: 30,
+          billingCycle: 'none'
+        }
+      };
+    }
+    
+    const authHeader = {
+      headers: {
+        Authorization: `Bearer ${user.token}`
+      }
+    };
+    
+    console.log('Requesting subscription usage with token');
     const response = await axios.get(`${API_URL}/usage`, authHeader);
     return response.data;
   } catch (error) {
@@ -296,12 +383,12 @@ const getSubscriptionUsage = async () => {
         success: true,
         usage: {
           videosUsed: 0,
-          videosLimit: 0,
-          videosRemaining: 0,
+          videosLimit: 10,
+          videosRemaining: 10,
           plan: 'free',
           isActive: false,
           endDate: null,
-          daysUntilReset: null,
+          daysUntilReset: 30,
           billingCycle: 'none'
         }
       };
@@ -319,5 +406,6 @@ export {
   cancelSubscription,
   verifySession,
   createBillingPortalSession,
-  getSubscriptionUsage
+  getSubscriptionUsage,
+  refreshSubscriptionData
 }; 

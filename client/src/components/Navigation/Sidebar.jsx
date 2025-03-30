@@ -43,22 +43,37 @@ const Sidebar = ({ user, onLogout }) => {
     const fetchSubscriptionUsage = async () => {
       try {
         setLoadingUsage(true);
+        
+        // Only fetch if we have a user with a token
+        if (!user || !user.token) {
+          console.log('Skipping subscription usage fetch - no authenticated user');
+          setSubscriptionUsage(null);
+          return;
+        }
+        
         const response = await getSubscriptionUsage();
         
         if (response.success) {
           setSubscriptionUsage(response.usage);
         } else {
           console.error('Failed to fetch subscription usage:', response.error);
+          // Set to null to use fallback values
+          setSubscriptionUsage(null);
         }
       } catch (error) {
         console.error('Error fetching subscription usage:', error);
+        // Set to null to use fallback values
+        setSubscriptionUsage(null);
       } finally {
         setLoadingUsage(false);
       }
     };
     
-    if (user) {
+    // Only attempt to fetch if user is logged in
+    if (user && user.token) {
       fetchSubscriptionUsage();
+    } else {
+      setLoadingUsage(false);
     }
   }, [user, location.pathname]);
   

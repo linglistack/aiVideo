@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { getUserVideos } from '../../services/videoService';
+import { refreshToken } from '../../services/authService';
+import { getSubscriptionStatus } from '../../services/subscriptionService';
 
 // Helper function to format date
 const formatDate = (dateString) => {
@@ -28,7 +30,39 @@ const calculateDaysRemaining = (endDateString) => {
 const Dashboard = ({ user, subscriptionUsage, loadingUsage }) => {
   const [videos, setVideos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingSubscription, setLoadingSubscription] = useState(true);
   const [error, setError] = useState('');
+  const [localSubscription, setLocalSubscription] = useState(null);
+
+  // Fetch user subscription data directly (don't rely on passed props)
+  useEffect(() => {
+    const fetchSubscriptionData = async () => {
+      setLoadingSubscription(true);
+      try {
+        // First refresh the token
+        const refreshResult = await refreshToken();
+        if (!refreshResult.success) {
+          console.warn('Token refresh failed, using fallback subscription data');
+          return;
+        }
+        
+        // Then get subscription status
+        const result = await getSubscriptionStatus();
+        if (result.success) {
+          console.log('Fetched subscription data for dashboard:', result.subscription);
+          setLocalSubscription(result.subscription);
+        } else {
+          console.warn('Failed to fetch subscription status:', result.error);
+        }
+      } catch (err) {
+        console.error('Error fetching subscription data:', err);
+      } finally {
+        setLoadingSubscription(false);
+      }
+    };
+    
+    fetchSubscriptionData();
+  }, []);
 
   useEffect(() => {
     const fetchVideos = async () => {
@@ -48,24 +82,30 @@ const Dashboard = ({ user, subscriptionUsage, loadingUsage }) => {
     fetchVideos();
   }, []);
 
-  // If we have subscription usage data from the API, use it
-  // Otherwise, fall back to the data from the user object
-  const subscription = subscriptionUsage || user?.subscription || {
+  // First try localSubscription (direct API data), then subscriptionUsage (props),
+  // then user?.subscription (from localStorage via props), then fallback defaults
+  const subscription = localSubscription || subscriptionUsage || user?.subscription || {
     videosUsed: 0,
-    videosLimit: 0,
-    plan: 'starter',
+    videosLimit: 10,
+    plan: 'free',
     endDate: null
   };
   
-  // Use the videosRemaining from the API if available, otherwise calculate it
-  const videosRemaining = subscriptionUsage 
-    ? subscriptionUsage.videosRemaining 
-    : Math.max(0, subscription.videosLimit - subscription.videosUsed);
+  // Use the videosRemaining from the most reliable source
+  const videosRemaining = localSubscription 
+    ? (localSubscription.videosLimit - localSubscription.videosUsed)
+    : subscriptionUsage 
+      ? subscriptionUsage.videosRemaining 
+      : Math.max(0, subscription.videosLimit - subscription.videosUsed);
   
-  // Use the daysUntilReset from the API if available, otherwise calculate it
-  const daysRemaining = subscriptionUsage 
-    ? subscriptionUsage.daysUntilReset 
-    : calculateDaysRemaining(subscription.endDate);
+  // Use the daysUntilReset from the most reliable source
+  const daysRemaining = localSubscription
+    ? calculateDaysRemaining(localSubscription.endDate)
+    : subscriptionUsage 
+      ? subscriptionUsage.daysUntilReset 
+      : calculateDaysRemaining(subscription.endDate);
+
+  const isLoadingSubscriptionData = loadingUsage || loadingSubscription;
 
   return (
     <div className="pt-0 min-h-screen bg-black text-white">
@@ -88,50 +128,68 @@ const Dashboard = ({ user, subscriptionUsage, loadingUsage }) => {
         <div className="bg-tiktok-dark rounded-2xl p-6 mb-8">
           <h2 className="text-xl font-bold mb-4">Subscription Overview</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-black bg-opacity-30 rounded-xl p-4 text-center">
-              <p className="text-gray-400 text-sm">Monthly Videos</p>
-              <div className="flex items-center justify-center mt-2">
-                <span className="text-3xl font-bold mr-2">
-                  {subscription.videosUsed || 0}
-                </span>
-                <span className="text-gray-400">/ {subscription.videosLimit || 0}</span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-2 mt-3">
-                <div 
-                  className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink h-2 rounded-full" 
-                  style={{ width: `${subscription.videosLimit ? (subscription.videosUsed / subscription.videosLimit) * 100 : 0}%` }}
-                ></div>
-              </div>
-              <p className="text-gray-400 text-xs mt-2">
-                <span className="text-tiktok-pink font-semibold">{videosRemaining}</span> videos remaining this month
-              </p>
-            </div>
-            
-            <div className="bg-black bg-opacity-30 rounded-xl p-4 text-center">
-              <p className="text-gray-400 text-sm">Current Plan</p>
-              <p className="text-3xl font-bold mt-2">
-                {subscription.plan ? 
-                  (subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)) 
-                  : 'Free'}
-              </p>
-              <p className="text-gray-400 text-xs mt-2">
-                {subscription.plan === 'starter' ? '$19/month' : 
-                 subscription.plan === 'growth' ? '$49/month' : 
-                 subscription.plan === 'scale' ? '$95/month' : 'Free'}
-              </p>
-            </div>
-            
-            <div className="bg-black bg-opacity-30 rounded-xl p-4 text-center">
-              <p className="text-gray-400 text-sm">Renewal Date</p>
-              <p className="text-3xl font-bold mt-2">
-                {subscription.endDate ? formatDate(subscription.endDate) : 'N/A'}
-              </p>
-              <p className="text-gray-400 text-xs mt-2">
-                {daysRemaining !== null ? 
-                  `Resets in ${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}` : 
-                  'auto-renews'}
-              </p>
-            </div>
+            {isLoadingSubscriptionData ? (
+              <>
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="bg-black bg-opacity-30 rounded-xl p-4 animate-pulse">
+                    <div className="h-4 bg-gray-700 rounded w-2/3 mb-4"></div>
+                    <div className="h-8 bg-gray-700 rounded w-1/2 mb-2"></div>
+                    <div className="h-2 bg-gray-700 rounded w-full mb-3"></div>
+                    <div className="h-3 bg-gray-700 rounded w-3/4"></div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                <div className="bg-black bg-opacity-30 rounded-xl p-4 text-center">
+                  <p className="text-gray-400 text-sm">Monthly Videos</p>
+                  <div className="flex items-center justify-center mt-2">
+                    <span className="text-3xl font-bold mr-2">
+                      {subscription.videosUsed || 0}
+                    </span>
+                    <span className="text-gray-400">/ {subscription.videosLimit || 0}</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2 mt-3">
+                    <div 
+                      className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink h-2 rounded-full" 
+                      style={{ width: `${subscription.videosLimit ? (subscription.videosUsed / subscription.videosLimit) * 100 : 0}%` }}
+                    ></div>
+                  </div>
+                  <p className="text-gray-400 text-xs mt-2">
+                    <span className="text-tiktok-pink font-semibold">{videosRemaining}</span> videos remaining this month
+                  </p>
+                </div>
+                
+                <div className="bg-black bg-opacity-30 rounded-xl p-4 text-center">
+                  <p className="text-gray-400 text-sm">Current Plan</p>
+                  <p className="text-3xl font-bold mt-2">
+                    {subscription.plan ? 
+                      ((subscription.plan.toLowerCase() === 'free' || subscription.plan.toLowerCase() === 'starter') ? 
+                        subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1) : 
+                        subscription.plan) 
+                      : 'Free'}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-2">
+                    {subscription.planDetails?.monthlyPrice ? `$${subscription.planDetails.monthlyPrice}/month` :
+                     subscription.plan === 'starter' ? '$19/month' : 
+                     subscription.plan === 'growth' ? '$49/month' : 
+                     subscription.plan === 'scale' ? '$95/month' : 'Free'}
+                  </p>
+                </div>
+                
+                <div className="bg-black bg-opacity-30 rounded-xl p-4 text-center">
+                  <p className="text-gray-400 text-sm">Renewal Date</p>
+                  <p className="text-3xl font-bold mt-2">
+                    {subscription.endDate ? formatDate(subscription.endDate) : 'N/A'}
+                  </p>
+                  <p className="text-gray-400 text-xs mt-2">
+                    {daysRemaining !== null ? 
+                      `Resets in ${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}` : 
+                      'auto-renews'}
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         </div>
         
