@@ -42,7 +42,7 @@ const AuthContainer = styled(Box)(({ theme }) => ({
   justifyContent: 'center',
   paddingTop: '5vh',
   paddingBottom: '2vh',
-  background: '#121212',
+  background: '#000000',
 }));
 
 const StyledPaper = styled(Paper)(({ theme }) => ({
