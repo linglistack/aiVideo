@@ -33,6 +33,27 @@ const aiUserSchema = new mongoose.Schema({
   stripeCustomerId: {
     type: String
   },
+  paymentMethod: {
+    id: String,
+    last4: String,
+    brand: String,
+    expMonth: String,
+    expYear: String,
+    nameOnCard: String,
+    createdAt: Date
+  },
+  paymentMethods: [{
+    id: String,
+    last4: String,
+    brand: String,
+    expMonth: String,
+    expYear: String,
+    nameOnCard: String,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   subscription: {
     plan: {
       type: String,

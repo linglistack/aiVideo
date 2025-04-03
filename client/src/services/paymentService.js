@@ -52,26 +52,7 @@ export async function getPaymentMethods(token) {
       }
     });
 
-    // If we successfully fetched payment methods
-    if (response.data.success && response.data.methods && response.data.methods.length > 0) {
-      // Try to update the user object in localStorage with the latest payment method
-      try {
-        const userString = localStorage.getItem('user');
-        if (userString) {
-          const user = JSON.parse(userString);
-          if (user) {
-            // Attach the first payment method to the user object (assuming primary payment method)
-            user.paymentMethod = response.data.methods[0];
-            localStorage.setItem('user', JSON.stringify(user));
-            console.log('Updated user localStorage with payment method');
-          }
-        }
-      } catch (err) {
-        console.error('Error updating localStorage with payment method:', err);
-        // Continue anyway as this is just an enhancement
-      }
-    }
-
+    // Return the response data directly without localStorage operations
     return response.data;
   } catch (error) {
     console.error('Error fetching payment methods:', error);
@@ -85,6 +66,9 @@ export async function getPaymentMethods(token) {
 // Delete payment method
 export const deletePaymentMethod = async (methodId, token) => {
   try {
+    // Ensure methodId is a string
+    const id = typeof methodId === 'object' ? methodId.id : methodId;
+    
     const config = {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -92,7 +76,7 @@ export const deletePaymentMethod = async (methodId, token) => {
     };
 
     const response = await axios.delete(
-      `${API_URL}/payments/methods/${methodId}`,
+      `${API_URL}/payments/methods/${id}`,
       config
     );
 
@@ -115,6 +99,32 @@ export const getPaymentHistory = async (token) => {
 
     const response = await axios.get(
       `${API_URL}/payments/history`,
+      config
+    );
+
+    return response.data;
+  } catch (error) {
+    throw error.response && error.response.data.message
+      ? error.response.data.message
+      : error.message;
+  }
+};
+
+// Set default payment method
+export const setDefaultPaymentMethod = async (methodId, token) => {
+  try {
+    // Ensure methodId is a string
+    const id = typeof methodId === 'object' ? methodId.id : methodId;
+    
+    const config = {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    };
+
+    const response = await axios.put(
+      `${API_URL}/payments/methods/default`,
+      { methodId: id },
       config
     );
 

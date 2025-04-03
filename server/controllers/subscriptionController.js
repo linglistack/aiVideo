@@ -305,7 +305,7 @@ const createCheckoutSession = async (req, res) => {
 // Create payment intent (for custom payment form)
 const createPaymentIntent = async (req, res) => {
   try {
-    const { priceId, paymentMethodId } = req.body;
+    const { priceId, paymentMethodId, saveMethod = true } = req.body;
     
     if (!priceId || !paymentMethodId) {
       return res.status(400).json({
@@ -314,18 +314,39 @@ const createPaymentIntent = async (req, res) => {
       });
     }
     
-    const subscription = await stripeService.createSubscription(
-      req.user._id,
-      priceId,
-      paymentMethodId
-    );
-    
-    res.json({
-      success: true,
-      subscription
-    });
+    try {
+      const subscription = await stripeService.createSubscription(
+        req.user._id,
+        priceId,
+        paymentMethodId,
+        saveMethod
+      );
+      
+      res.json({
+        success: true,
+        subscription
+      });
+    } catch (stripeError) {
+      console.error('Stripe error in createPaymentIntent:', stripeError);
+      
+      // Handle specific Stripe errors
+      if (stripeError.message.includes('No such PaymentMethod') || 
+          stripeError.message.includes('Invalid payment method')) {
+        return res.status(400).json({
+          success: false,
+          error: `Invalid payment method: The payment method no longer exists or is invalid. Please use a different payment method.`,
+          code: 'invalid_payment_method'
+        });
+      }
+      
+      // For other Stripe errors, return the error message
+      return res.status(400).json({
+        success: false,
+        error: stripeError.message || 'Error processing payment'
+      });
+    }
   } catch (error) {
-    console.error('Error creating payment intent:', error);
+    console.error('Server error in createPaymentIntent:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Server error'

@@ -52,69 +52,147 @@ const getOrCreateCustomer = async (userId) => {
 };
 
 // Create a subscription
-const createSubscription = async (userId, priceId, paymentMethodId) => {
+const createSubscription = async (userId, priceId, paymentMethodId, saveMethod = true) => {
   try {
     const customer = await getOrCreateCustomer(userId);
     
-    // Attach payment method to customer
-    await stripe.paymentMethods.attach(paymentMethodId, {
-      customer: customer.id,
-    });
-    
-    // Set this payment method as the default
-    await stripe.customers.update(customer.id, {
-      invoice_settings: {
-        default_payment_method: paymentMethodId,
-      },
-    });
-    
-    // Get plan details
-    const plan = await Plan.findOne({
-      $or: [
-        { monthlyPriceId: priceId },
-        { yearlyPriceId: priceId }
-      ]
-    });
-    
-    if (!plan) {
-      throw new Error('Plan not found for the provided price ID');
-    }
-    
-    // Determine if this is a monthly or yearly subscription
-    const isYearly = priceId === plan.yearlyPriceId;
-    
-    // Create the subscription
-    const subscription = await stripe.subscriptions.create({
-      customer: customer.id,
-      items: [{ price: priceId }],
-      expand: ['latest_invoice.payment_intent'],
-      metadata: {
-        userId,
-        planName: plan.name,
-        billingCycle: isYearly ? 'yearly' : 'monthly'
+    try {
+      // First validate the payment method exists
+      const paymentMethodCheck = await stripe.paymentMethods.retrieve(paymentMethodId);
+      if (!paymentMethodCheck || paymentMethodCheck.id !== paymentMethodId) {
+        throw new Error(`Invalid payment method: ${paymentMethodId}`);
       }
-    });
-    
-    // Calculate end date based on billing cycle
-    const endDate = new Date();
-    endDate.setMonth(endDate.getMonth() + (isYearly ? 12 : 1));
-    
-    // Update user's subscription info
-    await aiUser.findByIdAndUpdate(userId, {
-      'subscription.plan': plan.name.toLowerCase(),
-      'subscription.stripeSubscriptionId': subscription.id,
-      'subscription.startDate': new Date(),
-      'subscription.endDate': endDate,
-      'subscription.videosLimit': plan.videosLimit,
-      'subscription.videosUsed': 0,
-      'subscription.isActive': true,
-      'subscription.billingCycle': isYearly ? 'yearly' : 'monthly',
-      'subscription.price': isYearly ? plan.yearlyPrice / 12 : plan.monthlyPrice, // monthly equivalent price
-      'subscription.actualPrice': isYearly ? plan.yearlyPrice : plan.monthlyPrice, // actual charged price
-      'subscription.priceId': priceId
-    });
-    
-    return subscription;
+      
+      // Attach payment method to customer
+      const paymentMethod = await stripe.paymentMethods.attach(paymentMethodId, {
+        customer: customer.id,
+      });
+      
+      // Set this payment method as the default
+      await stripe.customers.update(customer.id, {
+        invoice_settings: {
+          default_payment_method: paymentMethodId,
+        },
+      });
+      
+      // Get plan details
+      const plan = await Plan.findOne({
+        $or: [
+          { monthlyPriceId: priceId },
+          { yearlyPriceId: priceId }
+        ]
+      });
+      
+      if (!plan) {
+        throw new Error('Plan not found for the provided price ID');
+      }
+      
+      // Determine if this is a monthly or yearly subscription
+      const isYearly = priceId === plan.yearlyPriceId;
+      
+      // Create the subscription
+      const subscription = await stripe.subscriptions.create({
+        customer: customer.id,
+        items: [{ price: priceId }],
+        expand: ['latest_invoice.payment_intent'],
+        metadata: {
+          userId: userId.toString(),
+          planName: plan.name,
+          billingCycle: isYearly ? 'yearly' : 'monthly'
+        }
+      });
+      
+      // Calculate end date based on billing cycle
+      const endDate = new Date();
+      endDate.setMonth(endDate.getMonth() + (isYearly ? 12 : 1));
+      
+      // Update user's subscription info
+      const updateData = {
+        'subscription.plan': plan.name.toLowerCase(),
+        'subscription.stripeSubscriptionId': subscription.id,
+        'subscription.startDate': new Date(),
+        'subscription.endDate': endDate,
+        'subscription.videosLimit': plan.videosLimit,
+        'subscription.videosUsed': 0,
+        'subscription.isActive': true,
+        'subscription.billingCycle': isYearly ? 'yearly' : 'monthly',
+        'subscription.price': isYearly ? plan.yearlyPrice / 12 : plan.monthlyPrice, // monthly equivalent price
+        'subscription.actualPrice': isYearly ? plan.yearlyPrice : plan.monthlyPrice, // actual charged price
+        'subscription.priceId': priceId
+      };
+      
+      // If saveMethod is true, also save the payment method to the user model
+      if (saveMethod && paymentMethod) {
+        // Format payment method details
+        const paymentMethodData = {
+          id: paymentMethod.id,
+          brand: paymentMethod.card.brand,
+          last4: paymentMethod.card.last4,
+          expMonth: paymentMethod.card.exp_month,
+          expYear: paymentMethod.card.exp_year,
+          createdAt: new Date()
+        };
+        
+        // Save to user model
+        updateData.paymentMethod = paymentMethodData;
+        
+        // Update paymentMethods array
+        const user = await aiUser.findById(userId);
+        
+        if (user) {
+          // Initialize paymentMethods array if it doesn't exist
+          if (!user.paymentMethods) {
+            user.paymentMethods = [];
+          }
+          
+          // Check if the payment method already exists
+          const methodExists = user.paymentMethods.some(
+            method => method.id === paymentMethod.id
+          );
+          
+          // Add to array if it doesn't exist
+          if (!methodExists) {
+            user.paymentMethods.push(paymentMethodData);
+            updateData.paymentMethods = user.paymentMethods;
+          }
+        }
+      }
+      
+      // Update the user with all the data
+      await aiUser.findByIdAndUpdate(userId, updateData);
+      
+      return subscription;
+    } catch (stripeError) {
+      // Enhanced error handling for payment method errors
+      if (stripeError.type === 'StripeInvalidRequestError') {
+        if (stripeError.message.includes('No such PaymentMethod')) {
+          // Clean up the invalid payment method from user records
+          try {
+            const user = await aiUser.findById(userId);
+            if (user && user.paymentMethods) {
+              // Remove the invalid payment method from user's saved methods
+              user.paymentMethods = user.paymentMethods.filter(
+                method => method.id !== paymentMethodId
+              );
+              
+              // If this was the default payment method, clear it
+              if (user.paymentMethod && user.paymentMethod.id === paymentMethodId) {
+                user.paymentMethod = user.paymentMethods.length > 0 ? 
+                  user.paymentMethods[0] : null;
+              }
+              
+              await user.save();
+              console.log(`Removed invalid payment method ${paymentMethodId} from user ${userId}`);
+            }
+          } catch (cleanupError) {
+            console.error('Error cleaning up invalid payment method:', cleanupError);
+          }
+        }
+      }
+      
+      // Re-throw with additional context
+      throw new Error(`Stripe error: ${stripeError.message}`);
+    }
   } catch (error) {
     console.error('Error creating subscription:', error);
     throw error;
@@ -172,7 +250,7 @@ const createCheckoutSession = async (userId, priceId, successUrl, cancelUrl, met
       cancel_url: cancelUrl,
       subscription_data: {
         metadata: {
-          userId,
+          userId: userId.toString(),
           ...metadata
         }
       }

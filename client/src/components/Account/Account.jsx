@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { getProfile, refreshToken } from '../../services/authService';
-import { savePaymentMethod, getPaymentMethods, deletePaymentMethod, getPaymentHistory } from '../../services/paymentService';
+import { getProfile, refreshToken, updateProfile, changePassword, deleteAccount } from '../../services/authService';
+import { savePaymentMethod, getPaymentMethods, deletePaymentMethod, getPaymentHistory, setDefaultPaymentMethod } from '../../services/paymentService';
+import { cancelSubscription, createBillingPortalSession } from '../../services/subscriptionService';
 import axios from 'axios';
 import { 
   IoPersonOutline, 
@@ -22,27 +23,42 @@ import {
 } from 'react-icons/io5';
 import * as subscriptionService from '../../services/subscriptionService';
 import * as authService from '../../services/authService';
+import { FaPaypal, FaCreditCard, FaCcVisa, FaCcMastercard, FaCcAmex, FaCcDiscover } from 'react-icons/fa';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements } from '@stripe/react-stripe-js';
+import { CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
+
+const stripePromise = loadStripe(process.env.REACT_APP_STRIPE_PUBLIC_KEY);
 
 const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscriptionUsage }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState('profile');
+  const [profileForm, setProfileForm] = useState({ name: '', email: '' });
+  const [passwordForm, setPasswordForm] = useState({ 
+    currentPassword: '', 
+    newPassword: '', 
+    confirmPassword: '' 
+  });
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
-  const [showAvatarInput, setShowAvatarInput] = useState(false);
-  const [avatarPreview, setAvatarPreview] = useState(null);
-  const [showCardModal, setShowCardModal] = useState(false);
-  const [showDeletePaymentModal, setShowDeletePaymentModal] = useState(false);
   const [showDeleteAccountConfirmation, setShowDeleteAccountConfirmation] = useState(false);
-  const [showPlanModal, setShowPlanModal] = useState(false);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-  const [processingPayment, setProcessingPayment] = useState(false);
+  const [processingCard, setProcessingCard] = useState(false);
+  const [showAddCardModal, setShowAddCardModal] = useState(false);
+  const [showDeletePaymentModal, setShowDeletePaymentModal] = useState(false);
+  const [showPlanSelectionModal, setShowPlanSelectionModal] = useState(false);
+  const [showCancelConfirmation, setShowCancelConfirmation] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null);
+  const [selectedBillingCycle, setSelectedBillingCycle] = useState('monthly');
   const [cancelReason, setCancelReason] = useState('');
+  const [paymentHistory, setPaymentHistory] = useState([]);
   const fileInputRef = useRef(null);
   
   // Payment tab state
-  const [showAddCardModal, setShowAddCardModal] = useState(false);
   const [cardForm, setCardForm] = useState({
     cardNumber: '',
     expiryMonth: '',
@@ -50,23 +66,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     cvc: '',
     nameOnCard: ''
   });
-  const [processingCard, setProcessingCard] = useState(false);
   const [paymentMethods, setPaymentMethods] = useState([]);
-  
-  // Profile form state
-  const [profileForm, setProfileForm] = useState({
-    name: user?.name || '',
-    email: user?.email || '',
-    phone: user?.phone || '',
-    company: user?.company || ''
-  });
-  
-  // Password form state
-  const [passwordForm, setPasswordForm] = useState({
-    currentPassword: '',
-    newPassword: '',
-    confirmPassword: ''
-  });
   
   // Avatar state - placeholder for future implementation
   const [avatar, setAvatar] = useState(user?.avatar || null);
@@ -151,6 +151,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               if (paymentResponse.methods.length > 0) {
                 const updatedUser = JSON.parse(localStorage.getItem('user')) || user || {};
                 updatedUser.paymentMethod = paymentResponse.methods[0];
+                updatedUser.paymentMethods = paymentResponse.methods;
                 localStorage.setItem('user', JSON.stringify(updatedUser));
                 
                 // Update app state if we aren't already using user from profile response
@@ -159,9 +160,17 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                 }
               }
             }
+          } else if (user?.paymentMethods && user.paymentMethods.length > 0) {
+            // If no API call but user already has payment methods, use those
+            setPaymentMethods(user.paymentMethods);
           }
         } catch (error) {
           console.error('Failed to load payment methods:', error);
+          
+          // Fallback to using payment methods from user object if API fails
+          if (user?.paymentMethods && user.paymentMethods.length > 0) {
+            setPaymentMethods(user.paymentMethods);
+          }
         }
       } catch (error) {
         setError('Failed to load profile. Please try again.');
@@ -192,7 +201,11 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   
   // Fetch payment methods from server
   const fetchPaymentMethods = async () => {
-    console.log('Fetching payment methods...');
+    // If we already have payment methods in state, don't refetch
+    if (paymentMethods && paymentMethods.length > 0) {
+      return;
+    }
+    
     try {
       // Get token directly from localStorage for reliability
       let token = null;
@@ -210,31 +223,42 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       }
       
       if (!token) {
-        console.error('No token available to fetch payment methods');
+        // Fallback to using payment methods from user object
+        if (user?.paymentMethods && user.paymentMethods.length > 0) {
+          setPaymentMethods(user.paymentMethods);
+        }
         return;
       }
       
       const response = await getPaymentMethods(token);
       if (response.success && response.methods) {
-        console.log('Payment methods fetched successfully:', response.methods);
         setPaymentMethods(response.methods);
         
-        // If payment methods were fetched, update the user state and localStorage
+        // If payment methods were fetched, update the user state without localStorage
         if (response.methods.length > 0) {
-          const updatedUser = { ...user };
-          updatedUser.paymentMethod = response.methods[0];
-          setUser(updatedUser);
-          
-          // Update localStorage
-          const storedUser = JSON.parse(localStorage.getItem('user')) || {};
-          storedUser.paymentMethod = response.methods[0];
-          localStorage.setItem('user', JSON.stringify(storedUser));
+          // Only update user state if needed
+          if (!user.paymentMethods || 
+              JSON.stringify(user.paymentMethods) !== JSON.stringify(response.methods)) {
+            const updatedUser = { ...user };
+            // Find the default payment method or use the first one
+            const defaultMethod = response.methods.find(m => m.isDefault) || response.methods[0];
+            updatedUser.paymentMethod = defaultMethod;
+            updatedUser.paymentMethods = response.methods;
+            setUser(updatedUser);
+          }
         }
       } else {
-        console.log('No payment methods found or error in response');
+        // Fallback to using payment methods from user object
+        if (user?.paymentMethods && user.paymentMethods.length > 0) {
+          setPaymentMethods(user.paymentMethods);
+        }
       }
     } catch (error) {
       console.error('Error fetching payment methods:', error);
+      // Fallback to using payment methods from user object if API fails
+      if (user?.paymentMethods && user.paymentMethods.length > 0) {
+        setPaymentMethods(user.paymentMethods);
+      }
     }
   };
   
@@ -504,24 +528,64 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   };
 
   // Handle delete payment method
-  const handleDeletePaymentMethod = async () => {
+  const handleDeletePaymentMethod = async (paymentMethodId) => {
     setProcessingCard(true);
     setError('');
     setSuccess('');
     
     try {
-      // Call API to delete the payment method
-      if (user?.paymentMethod?.id) {
-        await deletePaymentMethod(user.paymentMethod.id, user.token);
+      // Make sure we have a payment method ID
+      if (!paymentMethodId) {
+        if (user?.paymentMethod?.id) {
+          paymentMethodId = user.paymentMethod.id;
+        } else {
+          throw new Error('No payment method ID provided');
+        }
       }
+      
+      // Ensure we have a string ID, not an object
+      const methodId = typeof paymentMethodId === 'object' ? paymentMethodId.id : paymentMethodId;
+      
+      // Call API to delete the payment method
+      await deletePaymentMethod(methodId, user.token);
       
       // Update the user object to remove the payment method
       const updatedUser = { ...user };
-      delete updatedUser.paymentMethod;
       
-      // Update local storage and user state
+      // If deleting the default payment method
+      if (updatedUser.paymentMethod && updatedUser.paymentMethod.id === methodId) {
+        delete updatedUser.paymentMethod;
+      }
+      
+      // Remove from the payment methods array
+      if (updatedUser.paymentMethods && Array.isArray(updatedUser.paymentMethods)) {
+        updatedUser.paymentMethods = updatedUser.paymentMethods.filter(
+          method => method.id !== methodId
+        );
+        
+        // If we deleted the default and have other payment methods, set the first one as default
+        if (!updatedUser.paymentMethod && updatedUser.paymentMethods.length > 0) {
+          updatedUser.paymentMethod = updatedUser.paymentMethods[0];
+          
+          // Also update the default in the database
+          try {
+            await setDefaultPaymentMethod(updatedUser.paymentMethod.id, user.token);
+          } catch (error) {
+            console.error('Error setting new default payment method:', error);
+            // Continue anyway
+          }
+        }
+      }
+      
+      // Update local storage and state
       localStorage.setItem('user', JSON.stringify(updatedUser));
       setUser(updatedUser);
+      
+      // Also update the paymentMethods state to reflect the change immediately in UI
+      setPaymentMethods(prevMethods => {
+        if (!prevMethods) return [];
+        return prevMethods.filter(method => method.id !== methodId);
+      });
       
       setSuccess('Payment method removed successfully!');
     } catch (error) {
@@ -529,6 +593,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       console.error(error);
     } finally {
       setProcessingCard(false);
+      setSelectedPaymentMethod(null);
     }
   };
 
@@ -666,7 +731,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
 
     // Handle upgrade/change plan
     const handleChangePlan = async (planId, billingCycle = 'monthly') => {
-      setProcessingPayment(true);
+      setProcessingCard(true);
       
       try {
         // Get selected plan
@@ -697,44 +762,45 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       } catch (error) {
         console.error('Payment error:', error);
         setError('Failed to process plan change. Please try again.');
-        setProcessingPayment(false);
-        setShowPlanModal(false);
+        setProcessingCard(false);
+        setShowPlanSelectionModal(false);
       }
     };
 
     // Handle cancel subscription
     const handleCancelSubscription = async () => {
-      setProcessingPayment(true);
+      setProcessingCard(true);
       
       try {
-        // Call the service to cancel the subscription
+        // Call API to cancel subscription
         const response = await subscriptionService.cancelSubscription({
           reason: cancelReason || 'No reason provided'
         });
         
-        if (!response.success) {
-          throw new Error(response.error || 'Failed to cancel subscription');
-        }
-        
-        // First refresh subscription data to get latest status
-        const refreshResponse = await subscriptionService.refreshSubscriptionData();
-        
-        // Then refresh the full user profile to ensure everything is updated
-        const refreshedUser = await authService.getCurrentUser();
-        if (refreshedUser) {
-          setUser(refreshedUser);
-        }
-        
-        setShowCancelModal(false);
-        setSuccess('Your subscription has been successfully canceled. You will have access until the end of your billing period on ' + formatDate(nextBillingDate));
-        
-        // Force refresh the subscription usage data
+        if (response.success) {
+          // Update the user object
+          const updatedUser = { ...user };
+          if (updatedUser.subscription) {
+            updatedUser.subscription.cancelAtPeriodEnd = true;
+            updatedUser.subscription.willCancelAt = response.cancelDate;
+          }
+          
+          // Update localStorage and state
+          localStorage.setItem('user', JSON.stringify(updatedUser));
+          setUser(updatedUser);
+          
+          setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
+          setShowCancelConfirmation(false);
+          
+          // Refresh subscription usage if available
+          if (typeof setSubscriptionUsage === 'function') {
+            try {
         if (typeof loadingUsage === 'function') {
           loadingUsage(true);
-          try {
-            const usageResponse = await subscriptionService.getSubscriptionUsage();
-            if (usageResponse.success) {
-              // If component receives setSubscriptionUsage as prop
+              }
+              
+              const usageResponse = await subscriptionService.getSubscriptionUsage(user.token);
+              if (usageResponse && usageResponse.success) {
               if (typeof setSubscriptionUsage === 'function') {
                 setSubscriptionUsage(usageResponse.usage);
               } else {
@@ -746,6 +812,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           } finally {
             if (typeof loadingUsage === 'function') {
               loadingUsage(false);
+              }
             }
           }
         }
@@ -754,7 +821,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         setError('Failed to cancel subscription. Please try again.');
         console.error('Cancel subscription error:', error);
       } finally {
-        setProcessingPayment(false);
+        setProcessingCard(false);
       }
     };
 
@@ -781,7 +848,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-2xl font-bold">Change Your Plan</h2>
               <button 
-                onClick={() => setShowPlanModal(false)}
+                onClick={() => setShowPlanSelectionModal(false)}
                 className="text-gray-400 hover:text-white transition-colors"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -879,14 +946,14 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                     
                     <button
                       onClick={() => handleChangePlan(plan.id, selectedBillingCycle)}
-                      disabled={isCurrentPlan || processingPayment}
+                      disabled={isCurrentPlan || processingCard}
                       className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
                         isCurrentPlan
                           ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
                           : 'bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white hover:opacity-90'
                       }`}
                     >
-                      {processingPayment ? (
+                      {processingCard ? (
                         <div className="flex items-center justify-center">
                           <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
                           Processing...
@@ -906,30 +973,31 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             <div className="mt-6 border-t border-gray-800 pt-6">
               <div className="text-center">
                 <p className="text-gray-400 text-sm mb-4">Secure payment powered by Stripe</p>
-                <div className="flex justify-center space-x-4">
+                <div className="flex justify-center space-x-1">
                   {/* Credit Card */}
-                  <div className="bg-gray-900 px-4 py-2 rounded-lg">
-                    <svg className="h-6" viewBox="0 0 40 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <rect width="40" height="24" rx="4" fill="#171E2E"/>
-                      <path d="M7 10h26M11 15h4M18 15h6" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+                  <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <rect x="1" y="4" width="22" height="16" rx="2" strokeWidth="1.5" stroke="currentColor" />
+                      <line x1="1" y1="10" x2="23" y2="10" strokeWidth="1.5" stroke="currentColor" />
+                      <line x1="4" y1="16" x2="10" y2="16" strokeWidth="1.5" stroke="currentColor" />
                     </svg>
                   </div>
+                
                   
                   {/* PayPal */}
-                  <div className="bg-gray-900 px-4 py-2 rounded-lg">
-                    <svg className="h-6" viewBox="0 0 40 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <rect width="40" height="24" rx="4" fill="#171E2E"/>
-                      <path d="M9.145 8h6.535c1.816 0 3.562 1.151 3.191 3.321C18.5 13.5 16.655 14.7 14.565 14.7h-1.309c-.371 0-.618.41-.742.821L12 18H9l1.855-8.6c.123-.246.247-.41.495-.41h.866c.495 0 .618.246.618.41.124.575-.495.575-.495.575s-.123-.205-.247-.205c-.124 0-.247.205-.371.205H9.516c-.247 0-.494.163-.618.575L9.145 8z" fill="#009CDE"/>
-                      <path d="M22 12.7h3.145c.123-.576.619-3.322.619-3.322s.247-1.232 1.236-1.232h2.224c1.484 0 2.35.822 2.102 2.465-.372 2.794-2.101 5.177-4.694 5.177h-2.225c-.245 0-.494.165-.619.658L23.42 18H20.5l.619-2.877c.123-.493.123-.493.37-.658h.866c.495 0 .619.165.495.658h-.618c-.124 0-.248.164-.372.164h-.99c-.248 0-.371-.164-.495-.657L22 12.7z" fill="#003087"/>
-                      <path d="M29.326 10.434c-.123-.658-.618-.986-1.36-.986h-.494c-.124 0-.248.328-.124.328h.495c.37 0 .618.164.618.493 0 .329-.123.657-.247.986-.124.328-.619 1.315-1.237 1.315h-1.855l.371-1.974c.124-.493.248-.822.866-.822h.372c.123-.328.247-.328.123-.328h-.619c-.494 0-.618.164-.741.657l-.495 2.302-.124.822c0 .164.124.328.372.328h2.349c.99 0 1.73-1.151 1.73-2.302 0-.165 0-.329-.124-.493l.124-.326z" fill="#003087"/>
-                    </svg>
+                  <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
+                    <img 
+                      src="https://www.paypalobjects.com/digitalassets/c/website/marketing/apac/C2/logos-buttons/optimize/44_Grey_PayPal_Pill_Button.png" 
+                      alt="PayPal" 
+                      className="h-6"
+                    />
                   </div>
                   
                   {/* Apple Pay */}
-                  <div className="bg-gray-900 px-4 py-2 rounded-lg">
-                    <svg className="h-6" viewBox="0 0 40 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <rect width="40" height="24" rx="4" fill="#171E2E"/>
-                      <path d="M14.507 8.25c.414-.519.695-1.22.622-1.93-.624.035-1.38.432-1.82.957-.4.46-.736 1.189-.641 1.887.693.022 1.42-.375 1.839-.914zM16.375 17.364c.692.866 1.006 1.235 1.888 1.235 0 0 .168-.51.498-.151.498-.173 1.151-.509 1.799-1.193-1.475-.797-1.714-2.928-.363-3.92-.78-.969-1.91-.984-2.233-.984-.984 0-1.77.537-2.233.537-.497 0-1.179-.508-1.97-.508-1.532.016-2.969 1.265-2.969 3.058 0 1.9.736 3.919 1.658 5.22.4.605.877 1.265 1.515 1.265.605 0 .984-.411 1.835-.411.865 0 1.178.411 1.798.411.642 0 1.118-.649 1.54-1.265.27-.433.505-.865.666-1.265-1.151-.447-2-1.64-2-3.058 0-1.004.502-1.874 1.280-2.427-.778-.968-1.937-.97-1.937-.97.019.031.244 1.415 1.214 2.426zm8.78-7.363h-2.76l-1.592 4.692h-.031l-1.593-4.692h-2.777l3.093 8.531L16.71 23h2.68l5.763-13z" fill="white"/>
+                  <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" className="h-6" fill="white">
+                      <path d="M17.05 12.536c-.021-2.307 1.894-3.41 1.98-3.467-1.077-1.577-2.757-1.792-3.353-1.818-1.428-.145-2.79.84-3.511.84-.723 0-1.84-.82-3.026-.797-1.558.022-2.994.906-3.797 2.3-1.616 2.802-.413 6.934 1.161 9.204.77 1.112 1.687 2.358 2.888 2.313 1.16-.046 1.597-.75 2.996-.75 1.401 0 1.795.75 3.025.726 1.249-.02 2.04-1.137 2.803-2.253.884-1.29 1.248-2.543 1.269-2.607-.029-.013-2.435-.935-2.459-3.703-.004-1.005.39-1.857 1.024-2.488z"/>
+                      <path d="M15.315 6.403c.64-.776 1.071-1.854.953-2.926-.92.037-2.04.613-2.7 1.384-.593.688-1.113 1.786-.973 2.84 1.026.08 2.08-.522 2.72-1.298z"/>
                     </svg>
                   </div>
                 </div>
@@ -947,7 +1015,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold">Cancel Subscription</h2>
             <button 
-              onClick={() => setShowCancelModal(false)}
+              onClick={() => setShowCancelConfirmation(false)}
               className="text-gray-400 hover:text-white transition-colors"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -957,7 +1025,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           </div>
           
           <p className="text-gray-300 mb-6">
-            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing cycle.
+            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing period.
           </p>
           
           <div className="mb-6">
@@ -980,7 +1048,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           
           <div className="flex space-x-4">
             <button
-              onClick={() => setShowCancelModal(false)}
+              onClick={() => setShowCancelConfirmation(false)}
               className="flex-1 bg-gray-800 text-white py-3 px-4 rounded-lg hover:bg-gray-700 transition-colors"
             >
               Keep Subscription
@@ -988,10 +1056,10 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             
             <button
               onClick={handleCancelSubscription}
-              disabled={processingPayment}
+              disabled={processingCard}
               className="flex-1 bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition-colors"
             >
-              {processingPayment ? (
+              {processingCard ? (
                 <div className="flex items-center justify-center">
                   <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
                   Processing...
@@ -1096,14 +1164,14 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           ) : !isFreePlan ? (
             <div className="flex space-x-4">
               <button
-                onClick={() => setShowPlanModal(true)}
+                onClick={() => setShowPlanSelectionModal(true)}
                 className="flex-1 bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-4 rounded-xl hover:opacity-90 transition-colors"
               >
                 Change Plan
               </button>
               
               <button
-                onClick={() => setShowCancelModal(true)}
+                onClick={() => setShowCancelConfirmation(true)}
                 className="flex-1 bg-gray-800 text-white font-medium py-3 px-4 rounded-xl hover:bg-gray-700 transition-colors"
               >
                 Cancel
@@ -1111,7 +1179,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             </div>
           ) : (
             <button
-              onClick={() => setShowPlanModal(true)}
+              onClick={() => setShowPlanSelectionModal(true)}
               className="w-full bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-4 rounded-xl hover:opacity-90 transition-colors"
             >
               Upgrade Now
@@ -1120,8 +1188,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         </div>
         
         {/* Modals */}
-        {showPlanModal && <PlanSelectionModal />}
-        {showCancelModal && <CancelConfirmationModal />}
+        {showPlanSelectionModal && <PlanSelectionModal />}
+        {showCancelConfirmation && <CancelConfirmationModal />}
       </div>
     );
   };
@@ -1384,591 +1452,62 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   
   // Payment Tab Content
   const renderPaymentTab = () => {
-    // Helper function to format dates
-    const formatDate = (dateString) => {
-      if (!dateString) return 'N/A';
-      return new Date(dateString).toLocaleDateString();
-    };
-    
-    // Generate and download receipt as PDF
-    const generateReceipt = (payment) => {
-      // Create the receipt content
-      const receiptContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Receipt - ${formatDate(payment.date)}</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              margin: 0;
-              padding: 20px;
-              color: #333;
-            }
-            .receipt {
-              max-width: 800px;
-              margin: 0 auto;
-              border: 1px solid #ddd;
-              padding: 30px;
-              box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            }
-            .header {
-              text-align: center;
-              padding-bottom: 20px;
-              border-bottom: 2px solid #f0f0f0;
-              margin-bottom: 20px;
-            }
-            .logo {
-              font-size: 24px;
-              font-weight: bold;
-              color: #ff0050; /* TikTok pink */
-              margin-bottom: 10px;
-            }
-            .receipt-id {
-              font-size: 14px;
-              color: #777;
-              margin-bottom: 5px;
-            }
-            .receipt-date {
-              font-size: 14px;
-              color: #777;
-            }
-            .customer-info {
-              margin-bottom: 20px;
-            }
-            .info-row {
-              display: flex;
-              margin-bottom: 10px;
-            }
-            .info-label {
-              width: 120px;
-              font-weight: bold;
-            }
-            .info-value {
-              flex: 1;
-            }
-            .items {
-              width: 100%;
-              border-collapse: collapse;
-              margin-bottom: 20px;
-            }
-            .items th {
-              background-color: #f5f5f5;
-              text-align: left;
-              padding: 10px;
-              border-bottom: 1px solid #ddd;
-            }
-            .items td {
-              padding: 10px;
-              border-bottom: 1px solid #ddd;
-            }
-            .total-row {
-              font-weight: bold;
-            }
-            .footer {
-              margin-top: 40px;
-              text-align: center;
-              font-size: 12px;
-              color: #777;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="receipt">
-            <div class="header">
-              <div class="logo">AI Video Generator</div>
-              <div class="receipt-id">Receipt #${payment.id || 'N/A'}</div>
-              <div class="receipt-date">Date: ${formatDate(payment.date)}</div>
-            </div>
-            
-            <div class="customer-info">
-              <div class="info-row">
-                <div class="info-label">Customer:</div>
-                <div class="info-value">${user?.name || 'N/A'}</div>
-              </div>
-              <div class="info-row">
-                <div class="info-label">Email:</div>
-                <div class="info-value">${user?.email || 'N/A'}</div>
-              </div>
-              <div class="info-row">
-                <div class="info-label">Payment ID:</div>
-                <div class="info-value">${payment.id || 'N/A'}</div>
-              </div>
-              <div class="info-row">
-                <div class="info-label">Status:</div>
-                <div class="info-value">${payment.status === 'succeeded' ? 'Paid' : 'Pending'}</div>
-              </div>
-            </div>
-            
-            <table class="items">
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th>Plan</th>
-                  <th>Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>AI Video Generator Subscription</td>
-                  <td>${payment.plan || 'N/A'}</td>
-                  <td>$${payment.amount?.toFixed(2) || '0.00'}</td>
-                </tr>
-                <tr class="total-row">
-                  <td colspan="2">Total</td>
-                  <td>$${payment.amount?.toFixed(2) || '0.00'}</td>
-                </tr>
-              </tbody>
-            </table>
-            
-            <div class="footer">
-              <p>Thank you for your business!</p>
-              <p>For questions or concerns regarding this receipt, please contact support@aivideos.com</p>
-              <p>© ${new Date().getFullYear()} AI Video Generator, Inc. All rights reserved.</p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `;
-      
-      // Convert HTML to data URL
-      const blob = new Blob([receiptContent], { type: 'text/html' });
-      const dataUrl = URL.createObjectURL(blob);
-      
-      // Create a temporary link to download the file
-      const downloadLink = document.createElement('a');
-      downloadLink.href = dataUrl;
-      downloadLink.download = `receipt-${payment.id || formatDate(payment.date)}.html`;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      document.body.removeChild(downloadLink);
-      
-      // Clean up the URL object
-      setTimeout(() => URL.revokeObjectURL(dataUrl), 100);
-    };
-    
-    // Get current plan details from either subscriptionUsage or user object
-    const subscription = subscriptionUsage || user?.subscription || {
-      plan: 'Free Plan',
-      price: 0
-    };
-    
-    const currentPlan = subscription.plan ? 
-      (subscription.plan.toLowerCase() === 'free' || subscription.plan.toLowerCase() === 'free plan' ? 
-        'Free Plan' : subscription.plan) : 
-      'Free Plan';
-    
-    const planPrice = subscription.price || (
-      currentPlan.toLowerCase() === 'starter' ? 19 :
-      currentPlan.toLowerCase() === 'growth' ? 49 :
-      currentPlan.toLowerCase() === 'scale' ? 95 : 0
-    );
-    
-    // Mock payment history
-    const paymentHistory = user?.subscription?.payments || subscription?.payments || [
-      // If no payment history exists, show these examples in development
-      ...(process.env.NODE_ENV === 'development' ? [
-        { id: 'pi_123456', date: '2023-03-28', amount: planPrice, plan: currentPlan, status: 'succeeded' }
-      ] : [])
-    ];
-    
-    // Modal for adding a payment method
-    const AddCardModal = () => {
-      const cardNumberRef = useRef();
-      const expiryMonthRef = useRef();
-      const expiryYearRef = useRef();
-      const cvcRef = useRef();
-      const nameOnCardRef = useRef();
-      
-      const handleCardFormSubmit = async (e) => {
-        e.preventDefault();
-        setProcessingCard(true);
-        setError('');
-        
-        try {
-          // Debug user data
-          console.log('Current user state:', user ? { 
-            hasToken: !!user.token,
-            tokenLength: user.token ? user.token.length : 0,
-            id: user._id,
-            email: user.email
-          } : 'No user');
-          
-          // Get values directly from refs
-          const formData = {
-            cardNumber: cardNumberRef.current.value.replace(/\s/g, ''),
-            expiryMonth: expiryMonthRef.current.value,
-            expiryYear: expiryYearRef.current.value,
-            cvc: cvcRef.current.value,
-            nameOnCard: nameOnCardRef.current.value
-          };
-          
-          // Try to get fresh user data directly from localStorage, ignore any passed user prop
-          let tokenFromStorage = null;
-          try {
-            const storedUserData = localStorage.getItem('user');
-            if (storedUserData) {
-              const parsedData = JSON.parse(storedUserData);
-              if (parsedData && parsedData.token) {
-                console.log('Found token in localStorage with length:', parsedData.token.length);
-                tokenFromStorage = parsedData.token;
-              }
-            }
-          } catch (err) {
-            console.error('Error parsing user from localStorage:', err);
-          }
-          
-          // If we have a token from storage, use it directly
-          if (tokenFromStorage) {
-            console.log('Using token directly from localStorage');
-            
-            // Call API with the form data and token from storage
-            const response = await savePaymentMethod(formData, tokenFromStorage);
-            
-            // Handle success
-            setSuccess('Payment method added successfully!');
-            setShowAddCardModal(false);
-            
-            // Update the user object with the returned payment method
-            let updatedUserData;
-            try {
-              // Get the full user data from localStorage again
-              const fullUserData = JSON.parse(localStorage.getItem('user'));
-              
-              // Create updated user data
-              updatedUserData = { 
-                ...fullUserData, 
-                paymentMethod: response.paymentMethod || {
-                  last4: formData.cardNumber.slice(-4),
-                  brand: 'visa',
-                  expMonth: formData.expiryMonth,
-                  expYear: formData.expiryYear
-                } 
-              };
-              
-              // Update localStorage with the updated user data
-              localStorage.setItem('user', JSON.stringify(updatedUserData));
-              
-              // Update React state with the updated user data
-              setUser(updatedUserData);
-            } catch (updateError) {
-              console.error('Error updating user data:', updateError);
-              // Continue since the payment went through
-            }
-            
-            return; // Exit early since we succeeded
-          }
-          
-          // If we get here, we don't have a token from localStorage
-          throw new Error('Unable to find your authentication token. Please try logging out and logging back in.');
-        } catch (error) {
-          console.error('Payment error:', error);
-          
-          // Handle different types of errors
-          if (error.message && error.message.includes('Authentication')) {
-            setError(`Authentication error: ${error.message}. Try logging out and back in.`);
-          } else if (error.response && error.response.status === 401) {
-            setError('Your session has expired. Please log out and log back in to continue.');
-          } else {
-            setError(typeof error === 'string' ? error : (error.message || 'Failed to add payment method. Please try again.'));
-          }
-        } finally {
-          setProcessingCard(false);
-        }
-      };
-      
-      // Format card number with spaces as user types
-      const formatCardNumber = (e) => {
-        let value = e.target.value.replace(/\s/g, '').substring(0, 16);
-        if (value.length > 0) {
-          value = value.match(new RegExp('.{1,4}', 'g')).join(' ');
-        }
-        e.target.value = value;
-      };
-      
-      // Only allow digits for numeric fields
-      const ensureNumeric = (e) => {
-        const value = e.target.value.replace(/\D/g, '');
-        e.target.value = value;
-      };
-      
-      return (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
-          <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold">Add Payment Method</h2>
-              <button 
-                onClick={() => setShowAddCardModal(false)}
-                className="text-gray-400 hover:text-white transition-colors"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            
-            <form onSubmit={handleCardFormSubmit}>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-white text-sm font-medium mb-2">
-                    Card Number
-                  </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      ref={cardNumberRef}
-                      onInput={formatCardNumber}
-                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                      required
-                      placeholder="1234 5678 9012 3456"
-                      maxLength={19}
-                    />
-                    <svg className="absolute right-3 top-3 h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect>
-                      <line x1="1" y1="10" x2="23" y2="10"></line>
-                    </svg>
-                  </div>
-                </div>
-                
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">
-                      Month
-                    </label>
-                    <input
-                      type="text"
-                      ref={expiryMonthRef}
-                      onInput={ensureNumeric}
-                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                      required
-                      placeholder="MM"
-                      maxLength={2}
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">
-                      Year
-                    </label>
-                    <input
-                      type="text"
-                      ref={expiryYearRef}
-                      onInput={ensureNumeric}
-                      className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                      required
-                      placeholder="YY"
-                      maxLength={2}
-                    />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-white text-sm font-medium mb-2">
-                      CVC
-                    </label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        ref={cvcRef}
-                        onInput={ensureNumeric}
-                        className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                        required
-                        placeholder="123"
-                        maxLength={3}
-                      />
-                      <svg className="absolute right-3 top-3 h-4 w-4 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M12 2a10 10 0 100 20 10 10 0 000-20z"></path>
-                        <path d="M12 16v-4"></path>
-                        <path d="M12 8h.01"></path>
-                      </svg>
-                    </div>
-                  </div>
-                </div>
-                
-                <div>
-                  <label className="block text-white text-sm font-medium mb-2">
-                    Name on Card
-                  </label>
-                  <input
-                    type="text"
-                    ref={nameOnCardRef}
-                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
-                    required
-                    placeholder="John Doe"
-                  />
-                </div>
-              </div>
-              
-              <div className="mt-6">
-                <button
-                  type="submit"
-                  className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center w-full"
-                  disabled={processingCard}
-                >
-                  {processingCard ? (
-                    <>
-                      <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
-                      Processing...
-                    </>
-                  ) : (
-                    'Save Card'
-                  )}
-                </button>
-              </div>
-              
-              <p className="text-gray-400 text-xs text-center mt-4">
-                Your card information is securely processed. We don't store your full card details.
-              </p>
-            </form>
-          </div>
-        </div>
-      );
-    };
-    
-    // Confirmation modal for deleting payment method
-    const DeletePaymentMethodModal = () => (
-      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
-        <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
-          <div className="flex items-center mb-4 text-red-500">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
-            <h3 className="text-xl font-bold">Remove Payment Method?</h3>
-          </div>
-          
-          <p className="text-gray-300 mb-6">
-            Are you sure you want to remove this payment method? If you have an active subscription, you'll need to add a new payment method before your next billing cycle.
-          </p>
-          
-          <div className="flex items-center space-x-4">
-            <button
-              onClick={() => setShowDeletePaymentModal(false)}
-              className="flex-1 bg-gray-800 text-white py-3 px-4 rounded-xl hover:bg-gray-700 transition-colors"
-            >
-              Cancel
-            </button>
-            
-            <button
-              onClick={() => {
-                handleDeletePaymentMethod();
-                setShowDeletePaymentModal(false);
-              }}
-              className="flex-1 bg-red-600 text-white py-3 px-4 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center"
-              disabled={processingCard}
-            >
-              {processingCard ? (
-                <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin"></div>
-              ) : (
-                'Remove'
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-    
     return (
-      <div className="space-y-8">
-        {/* Payment Method */}
-        <div className="bg-tiktok-dark rounded-xl p-8">
-          <h2 className="text-xl font-bold mb-6">Payment Method</h2>
+      <div className="space-y-6">
+        <div className="section-container">
+          {/* Payment methods section with card icon header */}
+          <div className="mb-8">
+            {renderPaymentMethodsSection()}
+          </div>
           
-          {user?.paymentMethod ? (
-            <div className="bg-gray-800 p-5 rounded-xl flex items-center justify-between">
-              <div className="flex items-center">
-                <div className="h-10 w-16 bg-gray-700 rounded mr-4 flex items-center justify-center">
-                  {/* Card brand logo would go here */}
-                  <span className="text-white font-medium">VISA</span>
-                </div>
-                <div>
-                  <p className="font-medium">•••• •••• •••• {user.paymentMethod.last4}</p>
-                  <p className="text-gray-400 text-sm">Expires {user.paymentMethod.expMonth}/{user.paymentMethod.expYear}</p>
-                </div>
-              </div>
-              
-              <div>
-                <button 
-                  onClick={() => setShowAddCardModal(true)}
-                  className="text-tiktok-pink hover:text-tiktok-blue transition-colors mr-4"
-                >
-                  Update
-                </button>
-                <button 
-                  onClick={() => setShowDeletePaymentModal(true)} 
-                  className="text-red-500 hover:text-red-400 transition-colors"
-                >
-                  Remove
-                </button>
-              </div>
+          {/* Billing history section with receipt icon header */}
+          <div className="mb-8">
+            <div className="flex items-center mb-6">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-tiktok-pink h-6 w-6 mr-3">
+                <path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM16 18H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+              </svg>
+              <h2 className="text-xl font-semibold">Billing History</h2>
             </div>
-          ) : (
-            <div className="bg-gray-800 p-6 rounded-xl text-center">
-              <p className="text-gray-400 mb-4">No payment method on file</p>
-              <button 
-                onClick={() => setShowAddCardModal(true)}
-                className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-2 px-6 rounded-lg hover:opacity-90 transition-colors"
-              >
-                Add Payment Method
-              </button>
-            </div>
-          )}
+            {renderBillingHistorySection()}
+          </div>
         </div>
         
-        {/* Billing History */}
-        <div className="bg-tiktok-dark rounded-xl p-8">
-          <h2 className="text-xl font-bold mb-6">Payment History</h2>
-          
-          {paymentHistory.length > 0 ? (
-            <div className="overflow-x-auto rounded-lg border border-gray-700">
-              <table className="min-w-full divide-y divide-gray-800">
-                <thead className="bg-gray-900/50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Amount</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Plan</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
-                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Receipt</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-gray-800/30 divide-y divide-gray-800">
-                  {paymentHistory.map((payment, idx) => (
-                    <tr key={payment.id || idx} className="hover:bg-gray-800">
-                      <td className="px-4 py-4 text-sm">{formatDate(payment.date)}</td>
-                      <td className="px-4 py-4 text-sm">${payment.amount}</td>
-                      <td className="px-4 py-4 text-sm">{payment.plan}</td>
-                      <td className="px-4 py-4 text-sm">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          payment.status === 'succeeded' 
-                            ? 'bg-green-500/20 text-green-500' 
-                            : 'bg-yellow-500/20 text-yellow-500'
-                        }`}>
-                          {payment.status === 'succeeded' ? 'Paid' : 'Pending'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4 text-sm text-right">
-                        <button 
-                          onClick={() => generateReceipt(payment)}
-                          className="text-tiktok-blue hover:text-tiktok-pink transition-colors"
-                        >
-                          Download
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="bg-gray-800 p-6 rounded-xl text-center">
-              <p className="text-gray-400">No payment history available</p>
-            </div>
-          )}
-        </div>
+        {/* Modals */}
+        {showAddCardModal && (
+          <Elements stripe={stripePromise}>
+            <AddCardModal 
+              show={showAddCardModal}
+              onClose={() => setShowAddCardModal(false)}
+              onAddCard={handleAddCard}
+              onAddPayPal={handleAddPayPal}
+              processingCard={processingCard}
+            />
+          </Elements>
+        )}
         
-        {/* Add Card Modal */}
-        {showAddCardModal && <AddCardModal />}
+        <DeletePaymentMethodModal
+          show={showDeletePaymentModal}
+          onClose={() => setShowDeletePaymentModal(false)}
+          onConfirm={confirmDeletePaymentMethod}
+          paymentMethod={selectedPaymentMethod}
+        />
         
-        {/* Delete Payment Method Modal */}
-        {showDeletePaymentModal && <DeletePaymentMethodModal />}
+        <PlanSelectionModal
+          show={showPlanSelectionModal}
+          onClose={() => setShowPlanSelectionModal(false)}
+          onSelectPlan={handlePlanSelection}
+          selectedPlanId={selectedPlanId}
+          selectedBillingCycle={selectedBillingCycle}
+          onChangeBillingCycle={setSelectedBillingCycle}
+        />
+        
+        <CancelSubscriptionModal
+          show={showCancelConfirmation}
+          onClose={() => setShowCancelConfirmation(false)}
+          onConfirm={confirmCancelSubscription}
+          onReasonChange={setCancelReason}
+          cancelReason={cancelReason}
+        />
       </div>
     );
   };
@@ -1980,8 +1519,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         <div className="flex items-center mb-4 text-red-500">
           <IoWarningOutline className="text-3xl mr-3" />
           <h3 className="text-xl font-bold">Delete Your Account?</h3>
-        </div>
-        
+            </div>
+            
         <p className="text-gray-300 mb-6">
           This action <span className="text-red-500 font-bold">cannot be undone</span>. 
           All your data, videos, and subscription information will be permanently deleted.
@@ -2009,10 +1548,1074 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               </>
             )}
           </button>
+              </div>
+              </div>
+              </div>
+  );
+  
+  // Confirmation modal for deleting payment method
+  const DeletePaymentMethodModal = ({ show, onClose, onConfirm, paymentMethod }) => {
+    if (!show) return null;
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
+        <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
+          <div className="flex items-center mb-4 text-red-500">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <h3 className="text-xl font-bold">Remove Payment Method?</h3>
+              </div>
+          
+          <p className="text-gray-300 mb-6">
+            Are you sure you want to remove{' '}
+            {paymentMethod ? (
+              <span className="font-medium">
+                {paymentMethod.type === 'paypal'
+                  ? 'PayPal'
+                  : paymentMethod.type === 'apple_pay'
+                  ? 'Apple Pay'
+                  : paymentMethod.type === 'google_pay'
+                  ? 'Google Pay'
+                  : paymentMethod.type === 'express_checkout'
+                  ? paymentMethod.brand === 'apple_pay' ? 'Apple Pay' : 'Google Pay'
+                  : `${paymentMethod.brand} •••• ${paymentMethod.last4}`}
+              </span>
+            ) : (
+              'this payment method'
+            )}? 
+            {user?.subscription?.isActive && (
+              <span className="block mt-2">
+                If you have an active subscription, you'll need to add a new payment method before your next billing cycle.
+              </span>
+            )}
+          </p>
+          
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={onClose}
+              className="flex-1 bg-gray-800 text-white py-3 px-4 rounded-xl hover:bg-gray-700 transition-colors"
+            >
+              Cancel
+            </button>
+            
+            <button
+              onClick={onConfirm}
+              className="flex-1 bg-red-600 text-white py-3 px-4 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center"
+              disabled={processingCard}
+            >
+              {processingCard ? (
+                <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin"></div>
+              ) : (
+                'Remove'
+              )}
+            </button>
+            </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Render Subscription Section (for Payment Tab)
+  const renderSubscriptionSection = () => {
+    return (
+      <div className="subscription-section mb-8">
+        <h3 className="text-xl font-bold mb-4">Your Subscription</h3>
+        <div className="bg-gray-800 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h4 className="font-medium text-lg">{user?.subscription?.plan || 'Free Plan'}</h4>
+              <p className="text-gray-400 text-sm">
+                {user?.subscription?.isActive ? 'Active' : 'Not active'}
+              </p>
+            </div>
+            <button 
+              onClick={() => setShowPlanSelectionModal(true)}
+              className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white text-sm py-2 px-4 rounded-lg"
+            >
+              {user?.subscription?.isActive ? 'Change Plan' : 'Upgrade'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Render Payment Methods Section (for Payment Tab)
+  const renderPaymentMethodsSection = () => {
+    // Choose payment methods from state or user object
+    const methodsToUse = paymentMethods && paymentMethods.length > 0 
+      ? paymentMethods 
+      : (user.paymentMethods && user.paymentMethods.length > 0 ? user.paymentMethods : []);
+    
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-tiktok-pink h-6 w-6 mr-3">
+              <path fill="currentColor" d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
+            </svg>
+            <h2 className="text-xl font-semibold">Payment Methods</h2>
+          </div>
+          
+          {/* Only show this button when there are already payment methods */}
+          {methodsToUse.length > 0 && (
+            <button 
+              onClick={() => setShowAddCardModal(true)}
+              className="flex items-center text-sm bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white py-2 px-4 rounded-xl transition-all hover:opacity-90"
+            >
+              <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+              </svg>
+              Add New
+            </button>
+          )}
+        </div>
+        
+        {methodsToUse.length > 0 ? (
+          <div className="space-y-3">
+            {methodsToUse.map((method, index) => (
+              <PaymentMethodCard
+                key={index}
+                paymentMethod={method}
+                isDefault={user.paymentMethod && user.paymentMethod.id === method.id}
+                onDelete={() => handleDeletePaymentMethod(method.id)}
+                onMakeDefault={() => handleMakeDefaultPaymentMethod(method)}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="bg-gray-800 rounded-xl p-6 text-center">
+            <div className="mb-4 flex justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+              </svg>
+            </div>
+            <p className="text-gray-300 mb-4">You haven't added any payment methods yet.</p>
+            <button 
+              onClick={() => setShowAddCardModal(true)}
+              className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white py-2 px-6 rounded-xl hover:opacity-90 transition-opacity"
+            >
+              Add Payment Method
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+  
+  // Render Billing History Section (for Payment Tab)
+  const renderBillingHistorySection = () => {
+    // Helper function to format dates
+    const formatDate = (dateString) => {
+      if (!dateString) return 'N/A';
+      return new Date(dateString).toLocaleDateString();
+    };
+    
+    return (
+      <div>
+        {paymentHistory.length > 0 ? (
+          <div className="bg-gray-800 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-900 text-left">
+                  <tr>
+                    <th className="py-3 px-4 text-gray-400 font-medium text-sm">Date</th>
+                    <th className="py-3 px-4 text-gray-400 font-medium text-sm">Amount</th>
+                    <th className="py-3 px-4 text-gray-400 font-medium text-sm">Plan</th>
+                    <th className="py-3 px-4 text-gray-400 font-medium text-sm">Status</th>
+                    <th className="py-3 px-4 text-gray-400 font-medium text-sm">Receipt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paymentHistory.map((payment, idx) => (
+                    <tr key={payment.id || idx} className="border-t border-gray-700">
+                      <td className="py-3 px-4">{formatDate(payment.date)}</td>
+                      <td className="py-3 px-4">${payment.amount}</td>
+                      <td className="py-3 px-4">{payment.plan}</td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          payment.status === 'succeeded' 
+                            ? 'bg-green-500/20 text-green-500' 
+                            : 'bg-yellow-500/20 text-yellow-500'
+                        }`}>
+                          {payment.status === 'succeeded' ? 'Paid' : 'Pending'}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <button 
+                          onClick={() => generateReceipt(payment)}
+                          className="text-tiktok-blue hover:text-tiktok-pink transition-colors text-sm flex items-center"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                          Download
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-gray-800 rounded-xl p-6 text-center">
+            <div className="mb-4 flex justify-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <p className="text-gray-300">No payment history available</p>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Handle adding a new card
+  const handleAddCard = async (cardData) => {
+    try {
+      setProcessingCard(true);
+      
+      // Card data now contains a Stripe payment method from Stripe Elements
+      if (!cardData.stripePaymentMethod) {
+        throw new Error('No payment method received from Stripe');
+      }
+      
+      const paymentMethod = cardData.stripePaymentMethod;
+      
+      // Now save the payment method reference to our database
+      const paymentMethodData = {
+        id: paymentMethod.id, // This is the key - using Stripe's PM ID
+        type: 'card',
+        brand: paymentMethod.card.brand,
+        last4: paymentMethod.card.last4,
+        expMonth: paymentMethod.card.exp_month.toString(),
+        expYear: paymentMethod.card.exp_year.toString().slice(-2), // Save last 2 digits
+        nameOnCard: cardData.nameOnCard
+      };
+      
+      // Save to our database
+      const response = await savePaymentMethod(paymentMethodData, user.token);
+      
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to save payment method');
+      }
+      
+      // Use the returned payment method
+      const newPaymentMethod = response.paymentMethod;
+      
+      // Update the user with the new payment method
+      const updatedUser = { ...user };
+      
+      // Initialize payment methods array if needed
+      if (!updatedUser.paymentMethods) {
+        updatedUser.paymentMethods = [];
+      }
+      
+      // Add the new payment method
+      updatedUser.paymentMethods.push(newPaymentMethod);
+      
+      // Set as default if it's the first one
+      if (!updatedUser.paymentMethod) {
+        updatedUser.paymentMethod = newPaymentMethod;
+      }
+      
+      // Update the paymentMethods state
+      setPaymentMethods(prevMethods => [...(prevMethods || []), newPaymentMethod]);
+      
+      // Update localStorage and state
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      
+      setShowAddCardModal(false);
+      setSuccess('Payment method added successfully!');
+      return true;
+    } catch (error) {
+      console.error('Payment error:', error);
+      setError(error.message || 'Failed to add payment method. Please try again.');
+      return false;
+    } finally {
+      setProcessingCard(false);
+    }
+  };
+  
+  // Helper function to determine card brand from number
+  const determineCardBrand = (cardNumber) => {
+    // Remove all non-digit characters
+    const cleanNumber = cardNumber.replace(/\D/g, '');
+    
+    // Basic regex patterns for card identification
+    const patterns = {
+      visa: /^4/,
+      mastercard: /^5[1-5]/,
+      amex: /^3[47]/,
+      discover: /^(6011|65|64[4-9])/,
+      diners: /^(36|38|30[0-5])/,
+      jcb: /^35/
+    };
+    
+    // Check which pattern matches
+    for (const [brand, pattern] of Object.entries(patterns)) {
+      if (pattern.test(cleanNumber)) {
+        return brand;
+      }
+    }
+    
+    // Default to generic if no match
+    return 'unknown';
+  };
+  
+  // Handle adding PayPal
+  const handleAddPayPal = async (paypalData) => {
+    try {
+      setProcessingCard(true);
+      
+      // We need to create a dummy Stripe payment method for PayPal
+      // In production, you would integrate with PayPal's API directly
+      const stripe = await stripePromise;
+      
+      if (!stripe) {
+        throw new Error('Failed to load Stripe');
+      }
+      
+      // For this example, we'll create a simple card payment method in test mode
+      // In production, you should create a proper PayPal payment method or source
+      const { error, paymentMethod } = await stripe.createPaymentMethod({
+        type: 'card',
+        card: {
+          number: '4242424242424242', // Test card number
+          exp_month: 12,
+          exp_year: 2030,
+          cvc: '123'
+        },
+        billing_details: {
+          name: user.name,
+          email: paypalData.email || user.email
+        }
+      });
+      
+      if (error) {
+        throw new Error('Failed to create PayPal payment method: ' + error.message);
+      }
+      
+      // Format the payment method data for storage
+      const paymentMethodData = {
+        id: paymentMethod.id, // Use Stripe's payment method ID
+        type: 'paypal',
+        brand: 'paypal',
+        last4: 'PYPL',
+        email: paypalData.email || user.email
+      };
+      
+      // Save to the database first
+      const response = await savePaymentMethod(paymentMethodData, user.token);
+      
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to save PayPal account');
+      }
+      
+      // Use the returned payment method with server-generated ID
+      const newPaymentMethod = response.paymentMethod;
+      
+      // Update the user with the new payment method
+      const updatedUser = { ...user };
+      
+      // Initialize payment methods array if needed
+      if (!updatedUser.paymentMethods) {
+        updatedUser.paymentMethods = [];
+      }
+      
+      // Add the new payment method
+      updatedUser.paymentMethods.push(newPaymentMethod);
+      
+      // Set as default if it's the first one
+      if (!updatedUser.paymentMethod) {
+        updatedUser.paymentMethod = newPaymentMethod;
+      }
+      
+      // Update the paymentMethods state
+      setPaymentMethods(prevMethods => [...(prevMethods || []), newPaymentMethod]);
+      
+      // Update localStorage and state
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      
+      setShowAddCardModal(false);
+      setSuccess('PayPal account added successfully!');
+      return true;
+    } catch (error) {
+      console.error('PayPal error:', error);
+      setError(error.message || 'Failed to add PayPal account. Please try again.');
+      return false;
+    } finally {
+      setProcessingCard(false);
+    }
+  };
+  
+  // Handle making a payment method the default
+  const handleMakeDefaultPaymentMethod = async (method) => {
+    try {
+      setProcessingCard(true);
+      setError('');
+      setSuccess('');
+
+      // Get the method ID (either as string or from object)
+      const methodId = typeof method === 'string' ? method : method.id;
+
+      // Call API to set the default payment method
+      await setDefaultPaymentMethod(methodId, user.token);
+      
+      // Find the full method object if we only have the ID
+      const methodObj = typeof method === 'string' 
+        ? paymentMethods.find(m => m.id === methodId) 
+        : method;
+      
+      if (!methodObj) {
+        throw new Error('Payment method not found');
+      }
+      
+      // Update the user object
+      const updatedUser = { ...user };
+      updatedUser.paymentMethod = methodObj;
+      
+      // Update localStorage
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      
+      // Update the paymentMethods state to mark this method as default
+      // This ensures the UI updates immediately
+      if (paymentMethods && paymentMethods.length > 0) {
+        // Create a new array with the same payment methods
+        // This will trigger a re-render
+        setPaymentMethods([...paymentMethods]);
+      }
+      
+      // Update state
+      setUser(updatedUser);
+      setSuccess('Payment method set as default');
+    } catch (error) {
+      console.error('Error setting default payment method:', error);
+      setError('Failed to set default payment method');
+    } finally {
+      setProcessingCard(false);
+    }
+  };
+  
+  // Confirm deletion of a payment method
+  const confirmDeletePaymentMethod = async () => {
+    setProcessingCard(true);
+    try {
+      // Make sure we have a selected payment method
+      if (!selectedPaymentMethod) {
+        throw new Error('No payment method selected for deletion');
+      }
+      
+      // Get the method ID (either as string or from object)
+      const methodId = typeof selectedPaymentMethod === 'string' 
+        ? selectedPaymentMethod 
+        : selectedPaymentMethod.id;
+      
+      // Call API to delete the payment method
+      await deletePaymentMethod(methodId, user.token);
+      
+      // Update the user object
+      const updatedUser = { ...user };
+      
+      // If deleting the default payment method
+      if (updatedUser.paymentMethod && updatedUser.paymentMethod.id === methodId) {
+        delete updatedUser.paymentMethod;
+      }
+      
+      // Remove from the payment methods array
+      if (updatedUser.paymentMethods && Array.isArray(updatedUser.paymentMethods)) {
+        updatedUser.paymentMethods = updatedUser.paymentMethods.filter(
+          method => method.id !== methodId
+        );
+        
+        // If we deleted the default and have other payment methods, set the first one as default
+        if (!updatedUser.paymentMethod && updatedUser.paymentMethods.length > 0) {
+          updatedUser.paymentMethod = updatedUser.paymentMethods[0];
+          
+          // Also update in the database
+          try {
+            await setDefaultPaymentMethod(updatedUser.paymentMethod.id, user.token);
+          } catch (error) {
+            console.error('Error setting new default payment method:', error);
+            // Continue anyway
+          }
+        }
+      }
+      
+      // Update the paymentMethods state directly to reflect the change in UI immediately
+      setPaymentMethods(prevMethods => {
+        if (!prevMethods) return [];
+        return prevMethods.filter(method => method.id !== methodId);
+      });
+      
+      // Update localStorage and state
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      
+      // Close modal and show success
+      setShowDeletePaymentModal(false);
+      setSuccess('Payment method removed successfully');
+    } catch (error) {
+      console.error('Error removing payment method:', error);
+      setError('Failed to remove payment method');
+    } finally {
+      setShowDeletePaymentModal(false);
+      setProcessingCard(false);
+    }
+  };
+  
+  // Handle plan selection
+  const handlePlanSelection = (planId, billingCycle) => {
+    setSelectedPlanId(planId);
+    setSelectedBillingCycle(billingCycle);
+    
+    // In a real application, this would make an API call to update the subscription
+    // For now, just simulate success
+    setSuccess('Plan changed successfully!');
+    setShowPlanSelectionModal(false);
+  };
+  
+  // Handle cancel subscription confirmation
+  const confirmCancelSubscription = () => {
+    // In a real application, this would make an API call to cancel the subscription
+    // For now, just simulate success
+    
+    // Update the user object
+    const updatedUser = { ...user };
+    if (updatedUser.subscription) {
+      updatedUser.subscription.cancelAtPeriodEnd = true;
+    }
+    
+    // Update localStorage and state
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+    setUser(updatedUser);
+    
+    setShowCancelConfirmation(false);
+    setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
+  };
+  
+  // Generate receipt function
+  const generateReceipt = (payment) => {
+    // Placeholder function for generating a receipt
+    console.log('Generating receipt for payment:', payment);
+    setSuccess('Receipt downloaded successfully');
+  };
+  
+  // Payment Method Card Component
+  const PaymentMethodCard = ({ paymentMethod, isDefault, onDelete, onMakeDefault }) => {
+    // Helper function to get the card brand logo/text
+    const getCardBrandLogo = (brand) => {
+      switch (brand?.toLowerCase()) {
+        case 'visa':
+          return <span className="text-white font-bold text-xs">VISA</span>;
+        case 'mastercard':
+          return <span className="text-white font-bold text-xs">MC</span>;
+        case 'amex':
+          return <span className="text-white font-bold text-xs">AMEX</span>;
+        case 'discover':
+          return <span className="text-white font-bold text-xs">DISC</span>;
+        case 'paypal':
+          return <span className="text-blue-400 font-bold text-xs">PayPal</span>;
+        case 'apple_pay':
+        case 'applepay':
+          return <span className="text-white font-bold text-xs">Apple Pay</span>;
+        case 'google_pay':
+        case 'googlepay':
+          return <span className="text-white font-bold text-xs">Google Pay</span>;
+        default:
+          return <span className="text-white font-bold text-xs">CARD</span>;
+      }
+    };
+    
+    return (
+      <div className="bg-gray-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="flex items-center">
+          <div className={`h-12 w-16 rounded-lg flex items-center justify-center ${
+            paymentMethod.brand === 'visa' ? 'bg-blue-900' :
+            paymentMethod.brand === 'mastercard' ? 'bg-red-900' :
+            paymentMethod.brand === 'amex' ? 'bg-blue-800' :
+            paymentMethod.brand === 'discover' ? 'bg-orange-900' :
+            paymentMethod.brand === 'paypal' ? 'bg-blue-800' :
+            'bg-gray-700'
+          }`}>
+            {getCardBrandLogo(paymentMethod.brand)}
+          </div>
+          <div className="ml-4">
+            <div className="flex items-center">
+              {paymentMethod.type === 'card' ? (
+                <p className="font-medium">•••• •••• •••• {paymentMethod.last4}</p>
+              ) : paymentMethod.type === 'paypal' ? (
+                <p className="font-medium">{paymentMethod.email || 'PayPal Account'}</p>
+              ) : ['apple_pay', 'google_pay', 'express_checkout'].includes(paymentMethod.type) ? (
+                <p className="font-medium">{paymentMethod.brand === 'apple_pay' ? 'Apple Pay' : 'Google Pay'}</p>
+              ) : (
+                <p className="font-medium">•••• •••• •••• {paymentMethod.last4}</p>
+              )}
+              {isDefault && (
+                <span className="ml-2 px-2 py-0.5 bg-green-500/20 text-green-500 text-xs rounded-full">
+                  Default
+                </span>
+              )}
+            </div>
+            <p className="text-gray-400 text-sm mt-1">
+              {paymentMethod.type === 'card' && paymentMethod.expMonth && paymentMethod.expYear 
+                ? `Expires ${paymentMethod.expMonth}/${paymentMethod.expYear}`
+                : paymentMethod.type === 'paypal' 
+                ? 'PayPal'
+                : paymentMethod.type === 'apple_pay' 
+                ? 'Apple Pay'
+                : paymentMethod.type === 'google_pay'
+                ? 'Google Pay'
+                : paymentMethod.type === 'express_checkout'
+                ? 'Express Checkout'
+                : 'Card'}
+            </p>
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-2 md:gap-4 mt-2 md:mt-0">
+          {!isDefault && (
+            <button 
+              onClick={onMakeDefault}
+              className="py-2 px-3 rounded-lg text-white bg-gray-700 hover:bg-gray-600 transition-colors text-sm"
+            >
+              Set Default
+            </button>
+          )}
+          <button 
+            onClick={onDelete} 
+            className="py-2 px-3 rounded-lg bg-red-900/30 hover:bg-red-800/50 text-red-400 hover:text-red-300 transition-colors text-sm"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+    );
+  };
+  
+  // Add Card Modal Component
+  const AddCardModal = ({ show, onClose, onAddCard, onAddPayPal, processingCard }) => {
+    const [activeTab, setActiveTab] = useState('card');
+    const [cardData, setCardData] = useState({
+      nameOnCard: ''
+    });
+    const [paypalEmail, setPaypalEmail] = useState('');
+    const [cardError, setCardError] = useState('');
+    const stripe = useStripe();
+    const elements = useElements();
+    
+    if (!show) return null;
+    
+    const handleCardFormSubmit = async (e) => {
+      e.preventDefault();
+      setCardError('');
+      
+      if (!stripe || !elements) {
+        setCardError('Stripe has not loaded yet. Please try again.');
+        return;
+      }
+      
+      // Validate name on card
+      if (!cardData.nameOnCard.trim()) {
+        setCardError('Please enter the name on the card');
+        return;
+      }
+      
+      try {
+        // Get card element
+        const cardElement = elements.getElement(CardElement);
+        
+        if (!cardElement) {
+          setCardError('Card element not found');
+          return;
+        }
+        
+        // Create payment method using Stripe Elements
+        const { error, paymentMethod } = await stripe.createPaymentMethod({
+          type: 'card',
+          card: cardElement,
+          billing_details: {
+            name: cardData.nameOnCard,
+          }
+        });
+        
+        if (error) {
+          setCardError(error.message);
+          return;
+        }
+        
+        // Call parent's onAddCard with the payment method info
+        onAddCard({
+          stripePaymentMethod: paymentMethod,
+          nameOnCard: cardData.nameOnCard
+        });
+        
+      } catch (error) {
+        setCardError(error.message || 'An error occurred while processing your card');
+      }
+    };
+    
+    const handlePaypalSubmit = (e) => {
+      e.preventDefault();
+      onAddPayPal({email: paypalEmail});
+    };
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
+        <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold">Add Payment Method</h2>
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-white transition-colors"
+              disabled={processingCard}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          
+          {/* Payment Method Type Tabs */}
+          <div className="flex mb-6 border-b border-gray-700">
+            <button
+              onClick={() => setActiveTab('card')}
+              className={`px-4 py-2 font-medium text-sm ${
+                activeTab === 'card' 
+                  ? 'text-tiktok-pink border-b-2 border-tiktok-pink' 
+                  : 'text-gray-400 hover:text-white'
+                }`}
+              disabled={processingCard}
+            >
+              Credit / Debit Card
+            </button>
+            <button
+              onClick={() => setActiveTab('paypal')}
+              className={`px-4 py-2 font-medium text-sm ${
+                activeTab === 'paypal' 
+                  ? 'text-tiktok-pink border-b-2 border-tiktok-pink' 
+                  : 'text-gray-400 hover:text-white'
+                }`}
+              disabled={processingCard}
+            >
+              PayPal
+            </button>
+          </div>
+          
+          {/* Credit Card Form */}
+          {activeTab === 'card' && (
+            <form onSubmit={handleCardFormSubmit}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-white text-sm font-medium mb-2">
+                    Card Details
+                  </label>
+                  <div className="bg-gray-800 text-white rounded-xl p-3 border border-gray-700 focus-within:border-tiktok-pink focus-within:ring-2 focus-within:ring-tiktok-pink">
+                    <CardElement options={{
+                      style: {
+                        base: {
+                          color: '#ffffff',
+                          fontFamily: 'Arial, sans-serif',
+                          fontSize: '16px',
+                          '::placeholder': {
+                            color: '#aab7c4',
+                          },
+                        },
+                        invalid: {
+                          color: '#fa755a',
+                          iconColor: '#fa755a',
+                        },
+                      },
+                    }} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-white text-sm font-medium mb-2">
+                    Name on Card
+                  </label>
+                  <input
+                    type="text"
+                    value={cardData.nameOnCard}
+                    onChange={(e) => setCardData({...cardData, nameOnCard: e.target.value})}
+                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                    required
+                    placeholder="John Doe"
+                    disabled={processingCard}
+                  />
+                </div>
+                
+                {cardError && (
+                  <div className="text-red-500 text-sm">{cardError}</div>
+                )}
+              </div>
+              
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center w-full"
+                  disabled={processingCard || !stripe}
+                >
+                  {processingCard ? (
+                    <>
+                      <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    'Save Card'
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+          
+          {/* PayPal Form */}
+          {activeTab === 'paypal' && (
+            <form onSubmit={handlePaypalSubmit}>
+              <div className="space-y-4">
+                <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-4 flex items-center">
+                  <div>
+                    <h3 className="text-white font-medium mb-1">Link Your PayPal Account</h3>
+                    <p className="text-gray-400 text-sm">
+                      Simply enter your PayPal email address to link your account
+                    </p>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-white text-sm font-medium mb-2">
+                    PayPal Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={paypalEmail}
+                    onChange={(e) => setPaypalEmail(e.target.value)}
+                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                    required
+                    placeholder="your-email@example.com"
+                    disabled={processingCard}
+                  />
+                </div>
+              </div>
+              
+              <div className="mt-6">
+                <button
+                  type="submit"
+                  className="bg-gradient-to-r from-blue-500 to-blue-700 text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center w-full"
+                  disabled={processingCard}
+                >
+                  {processingCard ? (
+                    <>
+                      <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    'Connect PayPal Account'
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  };
+  
+  // Plan Selection Modal Component
+  const PlanSelectionModal = ({ show, onClose, onSelectPlan, selectedPlanId, selectedBillingCycle, onChangeBillingCycle }) => {
+    if (!show) return null;
+    
+    // Sample plans - in a real app, these would come from an API
+    const plans = [
+      {
+        id: 'starter',
+        name: 'Starter',
+        price: 19,
+        features: ['10 videos per month', 'Basic editing tools', 'Email support']
+      },
+      {
+        id: 'growth',
+        name: 'Growth',
+        price: 49,
+        features: ['50 videos per month', 'Advanced editing tools', 'Priority support']
+      },
+      {
+        id: 'scale',
+        name: 'Scale',
+        price: 99,
+        features: ['Unlimited videos', 'Premium effects', '24/7 dedicated support']
+      }
+    ];
+    
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
+        <div className="bg-tiktok-dark rounded-xl p-8 max-w-4xl w-full">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold">Choose a Plan</h2>
+                <button 
+              onClick={onClose}
+              className="text-gray-400 hover:text-white transition-colors"
+                >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+                </button>
+          </div>
+          
+          {/* Billing cycle toggle */}
+          <div className="flex justify-center mb-8">
+            <div className="bg-gray-900 p-1 rounded-xl inline-flex">
+                <button 
+                onClick={() => onChangeBillingCycle('monthly')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  selectedBillingCycle === 'monthly'
+                    ? 'bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Monthly
+                </button>
+              <button 
+                onClick={() => onChangeBillingCycle('yearly')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center ${
+                  selectedBillingCycle === 'yearly'
+                    ? 'bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Yearly
+                <span className="ml-1 bg-green-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  Save 20%
+                </span>
+              </button>
+            </div>
+        </div>
+        
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {plans.map((plan) => {
+              const isCurrentPlan = selectedPlanId === plan.id;
+              const yearlyDiscount = selectedBillingCycle === 'yearly' ? 0.8 : 1; // 20% discount
+              const price = plan.price * yearlyDiscount;
+              
+              return (
+                <div 
+                  key={plan.id}
+                  className={`bg-gray-900 rounded-xl p-6 border-2 ${
+                    isCurrentPlan 
+                      ? 'border-tiktok-pink' 
+                      : 'border-gray-800 hover:border-gray-700'
+                  } transition-all`}
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <h3 className="text-xl font-bold">{plan.name}</h3>
+                    {isCurrentPlan && (
+                      <span className="bg-tiktok-pink text-white text-xs font-medium px-2 py-1 rounded">
+                        Current
+                        </span>
+                    )}
+                  </div>
+                  
+                  <p className="text-3xl font-bold mb-4">
+                    ${selectedBillingCycle === 'yearly' ? (price).toFixed(2) : price}
+                    <span className="text-sm text-gray-400 font-normal">/month</span>
+                  </p>
+                  
+                  <ul className="text-sm text-gray-300 space-y-2 mb-6">
+                    {plan.features.map((feature, idx) => (
+                      <li key={idx} className="flex items-start">
+                        <svg className="h-5 w-5 text-tiktok-pink mr-2 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        {feature}
+                      </li>
+                    ))}
+                  </ul>
+                  
+                        <button 
+                    onClick={() => onSelectPlan(plan.id, selectedBillingCycle)}
+                    className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
+                      isCurrentPlan
+                        ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white hover:opacity-90'
+                    }`}
+                    disabled={isCurrentPlan}
+                  >
+                    {isCurrentPlan ? 'Current Plan' : 'Select Plan'}
+                        </button>
+            </div>
+              );
+            })}
+            </div>
+        </div>
+      </div>
+    );
+  };
+  
+  // Cancel Subscription Modal Component
+  const CancelSubscriptionModal = ({ show, onClose, onConfirm, onReasonChange, cancelReason }) => {
+    if (!show) return null;
+    
+    return (
+    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
+      <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold">Cancel Subscription</h2>
+            <button 
+              onClick={onClose}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+        </div>
+        
+        <p className="text-gray-300 mb-6">
+            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing cycle.
+          </p>
+          
+          <div className="mb-6">
+            <label className="block text-white text-sm font-medium mb-2">
+              Why are you cancelling? (Optional)
+            </label>
+            <select
+              value={cancelReason}
+              onChange={(e) => onReasonChange(e.target.value)}
+              className="bg-gray-800 text-white rounded-lg w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none"
+            >
+              <option value="">Select a reason...</option>
+              <option value="too_expensive">Too expensive</option>
+              <option value="not_using">Not using it enough</option>
+              <option value="missing_features">Missing features I need</option>
+              <option value="switching">Switching to another service</option>
+              <option value="other">Other reason</option>
+            </select>
+          </div>
+          
+          <div className="flex space-x-4">
+          <button
+              onClick={onClose}
+              className="flex-1 bg-gray-800 text-white py-3 px-4 rounded-lg hover:bg-gray-700 transition-colors"
+          >
+              Keep Subscription
+          </button>
+          
+          <button
+              onClick={onConfirm}
+              className="flex-1 bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition-colors"
+            >
+              Cancel Subscription
+          </button>
         </div>
       </div>
     </div>
   );
+  };
   
   if (loading && !profileForm.name) {
     return (

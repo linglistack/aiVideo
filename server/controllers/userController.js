@@ -12,6 +12,21 @@ const generateToken = (id) => {
   });
 };
 
+// User object formatter to include payment method info
+const formatUserResponse = (user) => {
+  return {
+    _id: user._id,
+    name: user.name,
+    email: user.email,
+    googleId: user.googleId,
+    role: user.role,
+    subscription: user.subscription,
+    paymentMethod: user.paymentMethod || null,
+    hasPassword: Boolean(user.password),
+    token: user.token || generateToken(user._id),
+  };
+};
+
 // @desc    Register a new user
 // @route   POST /api/users
 // @access  Public
@@ -44,14 +59,7 @@ const registerUser = async (req, res) => {
     if (user) {
       res.status(201).json({
         success: true,
-        user: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          subscription: user.subscription,
-          token: generateToken(user._id),
-        },
+        user: formatUserResponse(user)
       });
     } else {
       res.status(400).json({
@@ -118,19 +126,13 @@ const loginUser = async (req, res) => {
       });
     }
     
+    // Add token to user object for formatter function
+    user.token = generateToken(user._id);
+    
     // User authenticated, send back user data
     res.json({
       success: true,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        googleId: user.googleId,
-        role: user.role,
-        subscription: user.subscription,
-        hasPassword: Boolean(user.password),
-        token: generateToken(user._id),
-      },
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -151,15 +153,7 @@ const getUserProfile = async (req, res) => {
     if (user) {
       res.json({
         success: true,
-        user: {
-          _id: user._id,
-          name: user.name,
-          email: user.email,
-          googleId: user.googleId,
-          role: user.role,
-          subscription: user.subscription,
-          hasPassword: Boolean(user.password),
-        },
+        user: formatUserResponse(user)
       });
     } else {
       res.status(404).json({
@@ -217,17 +211,13 @@ const googleAuthUser = async (req, res) => {
       await user.save();
     }
     
+    // Add token to user object for formatter function
+    user.token = generateToken(user._id);
+    
     // Return user data and token
     res.json({
       success: true,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        subscription: user.subscription,
-        token: generateToken(user._id),
-      },
+      user: formatUserResponse(user)
     });
   } catch (error) {
     console.error('Google auth error:', error);

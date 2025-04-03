@@ -30,6 +30,27 @@ const userSchema = new mongoose.Schema({
     enum: ['user', 'admin'],
     default: 'user'
   },
+  paymentMethod: {
+    id: String,
+    last4: String,
+    brand: String,
+    expMonth: String,
+    expYear: String,
+    nameOnCard: String,
+    createdAt: Date
+  },
+  paymentMethods: [{
+    id: String,
+    last4: String,
+    brand: String,
+    expMonth: String,
+    expYear: String,
+    nameOnCard: String,
+    createdAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   subscription: {
     plan: {
       type: String,
