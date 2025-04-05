@@ -3,30 +3,53 @@ const mongoose = require('mongoose');
 // Global connection cache for serverless functions
 let cachedConnection = null;
 
+// Track connection promise to prevent multiple connection attempts
+let connectionPromise = null;
+
 const connectDB = async () => {
   try {
     // If already connected, return the existing connection
-    if (cachedConnection && mongoose.connection.readyState === 1) {
+    if (mongoose.connection.readyState === 1) {
       console.log('Using existing MongoDB connection');
-      return cachedConnection;
+      return mongoose;
     }
+    
+    // If connection is in progress, wait for it to complete
+    if (connectionPromise) {
+      console.log('Connection in progress, waiting for it to complete');
+      return await connectionPromise;
+    }
+    
+    console.log('Creating new MongoDB connection');
     
     // Connection options
     const options = {
       dbName: 'aivideo', // This ensures you only use the aivideo database
-      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-      bufferCommands: false, // Disable buffering for serverless
+      serverSelectionTimeoutMS: 10000, // Timeout after 10s (increased from 5s)
+      // For Vercel serverless, we need to allow buffering to prevent errors
+      // but will still explicitly await connections in our middleware
+      bufferCommands: true
     };
 
-    // Connect to MongoDB
-    const conn = await mongoose.connect(process.env.MONGODB_URI, options);
+    // Create a promise for the connection and store it
+    connectionPromise = mongoose.connect(process.env.MONGODB_URI, options);
     
-    // Store the connection in cache
+    // Wait for connection
+    const conn = await connectionPromise;
+    
+    // Once connected, store the connection
     cachedConnection = conn;
     
     console.log(`MongoDB Connected: ${conn.connection.host} to database: aivideo`);
+    
+    // Clear the connection promise after successful connection
+    connectionPromise = null;
+    
     return conn;
   } catch (error) {
+    // Clear the connection promise on error
+    connectionPromise = null;
+    
     console.error(`MongoDB connection error: ${error.message}`);
     
     // In serverless environment, don't exit the process

@@ -8,17 +8,7 @@ const mongoose = require('mongoose');
 
 dotenv.config();
 
-// Connect to database - wrapped in try/catch to prevent unhandled rejections
-try {
-  // Connect asynchronously but don't wait for it here
-  connectDB().catch(error => {
-    console.error('Database connection failed:', error.message);
-    // Don't exit process in serverless environment
-  });
-} catch (error) {
-  console.error('Database connection error:', error.message);
-}
-
+// Create Express app
 const app = express();
 
 // Middleware
@@ -38,13 +28,48 @@ if (process.env.NODE_ENV !== 'production') {
   app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 }
 
-// Routes
+// Import routes
 const authRoutes = require('./routes/authRoutes');
 const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const videoRoutes = require('./routes/videoRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 
+// Special endpoint to ensure DB connection is established
+app.get('/api/connect', async (req, res) => {
+  try {
+    await connectDB();
+    res.json({ success: true, message: 'Database connected' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Database connection middleware for Vercel
+// This ensures DB is connected before processing any API request
+const ensureDbConnected = async (req, res, next) => {
+  try {
+    // Skip for OPTIONS requests (CORS preflight)
+    if (req.method === 'OPTIONS') {
+      return next();
+    }
+    
+    // Connect to database if not already connected
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error('Database connection error in middleware:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Database connection failed'
+    });
+  }
+};
+
+// Apply DB connection middleware to all API routes
+app.use('/api', ensureDbConnected);
+
+// Apply routes
 app.use('/api/auth', authRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/videos', videoRoutes);
