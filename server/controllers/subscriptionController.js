@@ -4,6 +4,7 @@ const stripeService = require('../services/stripeService');
 const Plan = require('../models/Plan');
 const aiUser = require('../models/aiUser');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const subscriptionScheduler = require('../services/subscriptionScheduler');
 
 // Plan configurations
 const PLANS = {
@@ -138,21 +139,66 @@ const cancelSubscription = async (req, res) => {
       // In a production app, you might want to store this in a database
     }
     
-    // Cancel the subscription in Stripe
-    const subscription = await stripeService.cancelSubscription(req.user._id);
-    
-    // Get updated user data after cancellation
     const user = await aiUser.findById(req.user._id);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Check if user has an active subscription
+    if (!user.subscription || !user.subscription.isActive) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active subscription found'
+      });
+    }
+    
+    // If there's a Stripe subscription ID, cancel it through Stripe
+    if (user.subscription.stripeSubscriptionId) {
+      // Cancel the subscription in Stripe (at period end)
+      const stripeResult = await stripeService.cancelSubscription(user.subscription.stripeSubscriptionId);
+      
+      if (!stripeResult.success) {
+        console.error('Stripe cancellation failed:', stripeResult.error);
+        // We'll continue anyway to update our database
+      }
+    }
+    
+    // Mark subscription as canceled but keep it active until the end of the period
+    // This ensures user retains access until subscription actually ends
+    
+    // Save the current date for tracking when cancellation occurred
+    user.subscription.canceledAt = new Date();
+    
+    // Set cancel at period end flag to true - critical for the UI to show correct state
+    user.subscription.cancelAtPeriodEnd = true;
+    
+    // Keep isActive as true since user should maintain access until end of period
+    user.subscription.isActive = true;
+    
+    await user.save();
+    
+    console.log(`Subscription for user ${user._id} has been marked for cancellation at period end`);
     
     // Return comprehensive response with full subscription details
     res.json({
       success: true,
       message: 'Subscription canceled at period end',
-      subscription,
-      userSubscription: user.subscription,
-      cancelDate: new Date(),
-      endDate: user.subscription.endDate,
-      status: 'canceled'
+      subscription: {
+        ...user.subscription.toObject(),
+        // Add explicit flags for client-side clarity
+        isCanceled: true,
+        cancelAtPeriodEnd: true,
+        isActive: true, // User maintains access until end of billing period
+        // Include remaining information for UI updates
+        creditsRemaining: Math.max(0, (user.subscription.creditsTotal || 0) - (user.subscription.creditsUsed || 0)),
+        validUntil: user.subscription.endDate
+      },
+      cancelDate: user.subscription.canceledAt,
+      effectiveEndDate: user.subscription.endDate
     });
   } catch (error) {
     console.error('Error canceling subscription:', error);
@@ -215,10 +261,26 @@ const getSubscriptionStatus = async (req, res) => {
       planDetails = await Plan.findOne({ name: user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1) });
     }
     
+    // Prepare subscription data with all necessary fields
+    const subscriptionData = user.subscription.toObject();
+    
+    // Ensure required fields are present
+    const processedSubscriptionData = {
+      ...subscriptionData,
+      // Ensure these fields exist (using existing values if present, default values if not)
+      startDate: subscriptionData.startDate || subscriptionData.cycleStartDate || null,
+      endDate: subscriptionData.endDate || subscriptionData.cycleEndDate || null,
+      // Set cancellation flags
+      isCanceled: !!subscriptionData.canceledAt,
+      cancelAtPeriodEnd: !!subscriptionData.canceledAt,
+      // Ensure active status is correct
+      isActive: subscriptionData.isActive !== false // Default to true if not explicitly false
+    };
+    
     res.json({
       success: true,
       subscription: {
-        ...user.subscription.toObject(),
+        ...processedSubscriptionData,
         planDetails: planDetails
       }
     });
@@ -398,16 +460,64 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     const user = await aiUser.findById(userId);
     if (!user) return;
     
-    const endDate = new Date();
-    const billingCycle = user.subscription.billingCycle;
-    endDate.setMonth(endDate.getMonth() + (billingCycle === 'yearly' ? 12 : 1));
-    
-    await aiUser.findByIdAndUpdate(userId, {
-      'subscription.isActive': true,
-      'subscription.endDate': endDate
+    // Get the plan from the subscription
+    const priceId = subscription.items.data[0].price.id;
+    const plan = await Plan.findOne({
+      $or: [
+        { monthlyPriceId: priceId },
+        { yearlyPriceId: priceId }
+      ]
     });
+    
+    if (!plan) return;
+    
+    // Determine billing cycle
+    const isYearly = priceId === plan.yearlyPriceId;
+    
+    // Calculate subscription dates
+    const startDate = new Date(subscription.current_period_start * 1000);
+    const endDate = new Date(subscription.current_period_end * 1000);
+    
+    // Initialize credit cycle dates
+    const cycleStartDate = new Date();
+    const cycleEndDate = new Date();
+    cycleEndDate.setDate(cycleEndDate.getDate() + 30); // 30-day credit cycle
+    
+    // Handle pending downgrade if exists
+    if (user.subscription.pendingDowngrade && 
+        new Date(user.subscription.pendingDowngrade.scheduledDate) <= new Date()) {
+      // Apply the downgrade
+      const downgradePlanName = user.subscription.pendingDowngrade.plan;
+      const downgradePlan = await Plan.findOne({ 
+        name: downgradePlanName.charAt(0).toUpperCase() + downgradePlanName.slice(1) 
+      });
+      
+      if (downgradePlan) {
+        user.subscription.plan = downgradePlanName;
+        // Reset credits based on the new downgraded plan
+        user.subscription.creditsTotal = downgradePlan.videosCredits;
+        // Clear the pending downgrade
+        user.subscription.pendingDowngrade = undefined;
+      }
+    }
+    
+    // Update subscription with new billing period and fresh credits
+    user.subscription.stripeSubscriptionId = subscription.id;
+    user.subscription.startDate = startDate;
+    user.subscription.endDate = endDate;
+    user.subscription.cycleStartDate = cycleStartDate;
+    user.subscription.cycleEndDate = cycleEndDate;
+    user.subscription.creditsUsed = 0;
+    user.subscription.creditsTotal = plan.videosCredits;
+    user.subscription.isActive = true;
+    user.subscription.billingCycle = isYearly ? 'yearly' : 'monthly';
+    user.subscription.canceledAt = undefined; // Clear cancellation if resubscribed
+    
+    await user.save();
+    
+    console.log(`Updated subscription for user ${userId}: Plan ${plan.name}, Credits: ${plan.videosCredits}`);
   } catch (error) {
-    console.error('Error handling invoice payment succeeded:', error);
+    console.error('Error handling invoice payment success:', error);
   }
 };
 
@@ -602,11 +712,301 @@ const getSubscriptionUsage = async (req, res) => {
         isActive: subscription.isActive || false,
         endDate: subscription.endDate,
         daysUntilReset,
-        billingCycle: subscription.billingCycle || 'none'
+        billingCycle: subscription.billingCycle || 'none',
+        // Include cancellation status flags
+        cancelAtPeriodEnd: !!subscription.cancelAtPeriodEnd,
+        isCanceled: !!subscription.canceledAt,
+        canceledAt: subscription.canceledAt || null,
+        startDate: subscription.startDate || subscription.cycleStartDate || null
       }
     });
   } catch (error) {
     console.error('Error getting subscription usage:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
+// @desc    Upgrade user subscription
+// @route   POST /api/subscriptions/upgrade
+// @access  Private
+const upgradeSubscription = async (req, res) => {
+  try {
+    const { newPlan } = req.body;
+    
+    if (!newPlan) {
+      return res.status(400).json({
+        success: false,
+        error: 'New plan is required'
+      });
+    }
+    
+    const userId = req.user._id;
+    const user = await aiUser.findById(userId);
+    
+    if (!user || !user.subscription.isActive) {
+      return res.status(400).json({
+        success: false,
+        error: 'User does not have an active subscription'
+      });
+    }
+    
+    // Check if new plan is actually an upgrade
+    const currentPlanName = user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1);
+    const newPlanFormatted = newPlan.charAt(0).toUpperCase() + newPlan.slice(1);
+    
+    // Get plan details
+    const [currentPlan, upgradePlan] = await Promise.all([
+      Plan.findOne({ name: currentPlanName }),
+      Plan.findOne({ name: newPlanFormatted })
+    ]);
+    
+    if (!currentPlan || !upgradePlan) {
+      return res.status(404).json({
+        success: false,
+        error: 'Plan not found'
+      });
+    }
+    
+    // Verify it's actually an upgrade
+    const isYearly = user.subscription.billingCycle === 'yearly';
+    const currentPrice = isYearly ? currentPlan.yearlyPrice : currentPlan.monthlyPrice;
+    const newPrice = isYearly ? upgradePlan.yearlyPrice : upgradePlan.monthlyPrice;
+    
+    if (newPrice <= currentPrice) {
+      return res.status(400).json({
+        success: false,
+        error: 'New plan must be an upgrade from current plan'
+      });
+    }
+    
+    // Calculate prorated cost and credits
+    const prorationDetails = await subscriptionScheduler.calculateProration(userId, newPlan);
+    
+    if (!prorationDetails.success) {
+      return res.status(500).json({
+        success: false,
+        error: prorationDetails.error
+      });
+    }
+    
+    // Prepare upgrade in Stripe
+    const stripeUpgradeResult = await stripeService.updateSubscription(
+      user.stripeCustomerId,
+      user.subscription.stripeSubscriptionId,
+      isYearly ? upgradePlan.yearlyPriceId : upgradePlan.monthlyPriceId,
+      prorationDetails.proratedPrice
+    );
+    
+    if (!stripeUpgradeResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: stripeUpgradeResult.error
+      });
+    }
+    
+    // Update user subscription
+    user.subscription.plan = newPlan.toLowerCase();
+    user.subscription.creditsTotal += prorationDetails.additionalCredits;
+    
+    await user.save();
+    
+    res.json({
+      success: true,
+      message: 'Subscription upgraded successfully',
+      upgrade: prorationDetails,
+      subscription: user.subscription
+    });
+  } catch (error) {
+    console.error('Error upgrading subscription:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
+// @desc    Downgrade user subscription
+// @route   POST /api/subscriptions/downgrade
+// @access  Private
+const downgradeSubscription = async (req, res) => {
+  try {
+    const { newPlan } = req.body;
+    
+    if (!newPlan) {
+      return res.status(400).json({
+        success: false,
+        error: 'New plan is required'
+      });
+    }
+    
+    const userId = req.user._id;
+    const user = await aiUser.findById(userId);
+    
+    if (!user || !user.subscription.isActive) {
+      return res.status(400).json({
+        success: false,
+        error: 'User does not have an active subscription'
+      });
+    }
+    
+    // Check if new plan is actually a downgrade
+    const currentPlanName = user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1);
+    const newPlanFormatted = newPlan.charAt(0).toUpperCase() + newPlan.slice(1);
+    
+    // Get plan details
+    const [currentPlan, downgradePlan] = await Promise.all([
+      Plan.findOne({ name: currentPlanName }),
+      Plan.findOne({ name: newPlanFormatted })
+    ]);
+    
+    if (!currentPlan || !downgradePlan) {
+      return res.status(404).json({
+        success: false,
+        error: 'Plan not found'
+      });
+    }
+    
+    // Verify it's actually a downgrade
+    const isYearly = user.subscription.billingCycle === 'yearly';
+    const currentPrice = isYearly ? currentPlan.yearlyPrice : currentPlan.monthlyPrice;
+    const newPrice = isYearly ? downgradePlan.yearlyPrice : downgradePlan.monthlyPrice;
+    
+    if (newPrice >= currentPrice) {
+      return res.status(400).json({
+        success: false,
+        error: 'New plan must be a downgrade from current plan'
+      });
+    }
+    
+    // Schedule the downgrade to take effect at the end of the current billing cycle
+    // No refund is provided for downgrades as per business rules
+    const stripeDowngradeResult = await stripeService.scheduleSubscriptionUpdate(
+      user.stripeCustomerId,
+      user.subscription.stripeSubscriptionId,
+      isYearly ? downgradePlan.yearlyPriceId : downgradePlan.monthlyPriceId
+    );
+    
+    if (!stripeDowngradeResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: stripeDowngradeResult.error
+      });
+    }
+    
+    // Mark subscription for downgrade at next cycle
+    user.subscription.pendingDowngrade = {
+      plan: newPlan.toLowerCase(),
+      scheduledDate: stripeDowngradeResult.effectiveDate
+    };
+    
+    await user.save();
+    
+    res.json({
+      success: true,
+      message: 'Subscription scheduled for downgrade at the end of your billing cycle',
+      downgrade: {
+        currentPlan: currentPlan.name,
+        newPlan: downgradePlan.name,
+        effectiveDate: stripeDowngradeResult.effectiveDate
+      },
+      subscription: user.subscription
+    });
+  } catch (error) {
+    console.error('Error downgrading subscription:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
+// @desc    Use one credit from user's subscription
+// @route   POST /api/subscriptions/use-credit
+// @access  Private
+const useCredit = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const user = await aiUser.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Check if user has an active subscription
+    if (!user.subscription.isActive) {
+      return res.status(400).json({
+        success: false,
+        error: 'No active subscription found'
+      });
+    }
+    
+    // Check if user has available credits
+    const creditsRemaining = user.subscription.creditsTotal - user.subscription.creditsUsed;
+    
+    if (creditsRemaining <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No credits remaining in current cycle',
+        nextCycleDate: user.subscription.cycleEndDate
+      });
+    }
+    
+    // Increment used credits
+    user.subscription.creditsUsed += 1;
+    await user.save();
+    
+    res.json({
+      success: true,
+      creditsUsed: user.subscription.creditsUsed,
+      creditsRemaining: user.subscription.creditsTotal - user.subscription.creditsUsed,
+      nextCycleDate: user.subscription.cycleEndDate
+    });
+  } catch (error) {
+    console.error('Error using credit:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
+// @desc    Reset user's credit cycle manually (admin only)
+// @route   POST /api/subscriptions/reset-cycle/:userId
+// @access  Private/Admin
+const resetUserCycle = async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to perform this action'
+      });
+    }
+    
+    const { userId } = req.params;
+    
+    const result = await subscriptionScheduler.resetUserCreditCycle(userId);
+    
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'User credit cycle reset successfully',
+      result
+    });
+  } catch (error) {
+    console.error('Error resetting user cycle:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Server error'
@@ -626,5 +1026,9 @@ module.exports = {
   handleWebhook,
   verifySession,
   createBillingPortalSession,
-  getSubscriptionUsage
+  getSubscriptionUsage,
+  upgradeSubscription,
+  downgradeSubscription,
+  useCredit,
+  resetUserCycle
 }; 

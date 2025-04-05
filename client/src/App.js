@@ -322,7 +322,7 @@ const AppContent = ({ user, setUser, handleLogout }) => {
             user ? <Navigate to="/dashboard" /> : <Register onRegister={setUser} />
           } />
           <Route path="/dashboard" element={
-            user ? <DashboardWithRefresh user={user} setUser={setUser} /> : <Navigate to="/login" />
+            user ? <AccountWithUsage user={user} setUser={setUser} /> : <Navigate to="/login" />
           } />
           <Route path="/create" element={
             user ? <VideoGenerator /> : <Navigate to="/login" />
@@ -386,12 +386,35 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check if user is logged in
-    const loggedInUser = getCurrentUser();
-    if (loggedInUser) {
-      setUser(loggedInUser);
-    }
-    setLoading(false);
+    const initializeUser = async () => {
+      try {
+        // Check if user is logged in from localStorage
+        const loggedInUser = getCurrentUser();
+        
+        if (loggedInUser) {
+          // Set initial user state from localStorage
+          setUser(loggedInUser);
+          
+          // Then fetch fresh user data from the server
+          console.log('App: Fetching fresh user data from server');
+          const result = await getProfile();
+          
+          if (result.success) {
+            // Update user state with fresh data from server
+            console.log('App: Updated user data from server');
+            setUser(result.user);
+          } else {
+            console.warn('App: Failed to fetch fresh user data:', result.error);
+          }
+        }
+      } catch (error) {
+        console.error('App: Error fetching user data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    initializeUser();
   }, []);
 
   const handleLogin = (userData) => {

@@ -59,20 +59,22 @@ const getSubscriptionStatus = async () => {
     
     // If we get 401 unauthorized, return a default starter plan
     if (error.response?.status === 401) {
-      console.log('Providing default starter plan due to auth error');
+      console.log('Providing default free plan due to auth error');
       return {
         success: true,
         subscription: {
-          plan: 'starter',
-          isActive: true,
+          plan: 'free',
+          isActive: false,
           videosUsed: 0,
-          videosLimit: 10,
+          videosLimit: 5,
           startDate: new Date(),
           endDate: new Date(new Date().setMonth(new Date().getMonth() + 1)),
+          isCanceled: false,
+          cancelAtPeriodEnd: false,
           planDetails: {
-            name: 'Starter',
-            monthlyPrice: 19,
-            yearlyPrice: 190
+            name: 'Free',
+            monthlyPrice: 0,
+            yearlyPrice: 0
           }
         }
       };
@@ -227,14 +229,26 @@ const cancelSubscription = async (data = {}) => {
       try {
         const currentUser = JSON.parse(localStorage.getItem('user'));
         if (currentUser && currentUser.subscription) {
-          currentUser.subscription.isActive = false;
-          currentUser.subscription.canceledAt = new Date().toISOString();
-          currentUser.subscription.status = 'canceled';
-          currentUser.subscription.cancelAtPeriodEnd = true;
-          currentUser.subscription.isCanceled = true;
+          // Apply cancellation state but keep access until period end
+          // The key point is to keep isActive true but mark as canceled
+          const updatedSubscription = {
+            ...currentUser.subscription,
+            isActive: true, // Keep active until end of period
+            cancelAtPeriodEnd: true,
+            isCanceled: true,
+            canceledAt: new Date().toISOString(),
+          };
+          
+          // If the server returned subscription data, merge it
+          if (response.data.subscription) {
+            Object.assign(updatedSubscription, response.data.subscription);
+          }
+          
+          // Apply updates to user object
+          currentUser.subscription = updatedSubscription;
           
           localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Updated local user data with subscription cancellation');
+          console.log('Updated local user data with subscription cancellation:', updatedSubscription);
         }
       } catch (localStorageError) {
         console.error('Error updating local storage after cancellation:', localStorageError);

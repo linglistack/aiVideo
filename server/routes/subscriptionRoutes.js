@@ -9,9 +9,13 @@ const {
   handleWebhook,
   verifySession,
   createBillingPortalSession,
-  getSubscriptionUsage
+  getSubscriptionUsage,
+  upgradeSubscription,
+  downgradeSubscription,
+  useCredit,
+  resetUserCycle
 } = require('../controllers/subscriptionController');
-const { protect } = require('../middleware/authMiddleware');
+const { protect, admin } = require('../middleware/authMiddleware');
 
 // Get all subscription plans
 router.get('/plans', getPlans);
@@ -30,6 +34,18 @@ router.post('/create-payment-intent', protect, createPaymentIntent);
 
 // Cancel subscription
 router.delete('/cancel', protect, cancelSubscription);
+
+// Upgrade subscription
+router.post('/upgrade', protect, upgradeSubscription);
+
+// Downgrade subscription
+router.post('/downgrade', protect, downgradeSubscription);
+
+// Use one credit from subscription
+router.post('/use-credit', protect, useCredit);
+
+// Reset user's credit cycle (admin only)
+router.post('/reset-cycle/:userId', protect, resetUserCycle);
 
 // Stripe webhook
 router.post('/webhook', express.raw({ type: 'application/json' }), handleWebhook);

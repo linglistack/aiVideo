@@ -29,9 +29,9 @@ const planSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
-  videosLimit: {
+  videosCredits: {
     type: Number,
-    required: true
+    required: true // Number of video credits allocated per 30-day cycle
   },
   active: {
     type: Boolean,

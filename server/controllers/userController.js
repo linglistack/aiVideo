@@ -20,6 +20,7 @@ const formatUserResponse = (user) => {
     email: user.email,
     googleId: user.googleId,
     role: user.role,
+    avatar: user.avatar || null,
     subscription: user.subscription,
     paymentMethod: user.paymentMethod || null,
     hasPassword: Boolean(user.password),

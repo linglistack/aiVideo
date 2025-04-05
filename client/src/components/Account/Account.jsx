@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { getProfile, refreshToken, updateProfile, changePassword, deleteAccount } from '../../services/authService';
 import { savePaymentMethod, getPaymentMethods, deletePaymentMethod, getPaymentHistory, setDefaultPaymentMethod } from '../../services/paymentService';
@@ -283,26 +283,29 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     fileInputRef.current.click();
   };
   
-  // Handle avatar upload - placeholder for future implementation
+  // Handle avatar upload - now properly uploads to server
   const handleAvatarUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
-      // For now, just create a local object URL
-      // In a real implementation, you would upload to a server
       setUploadingAvatar(true);
       
-      setTimeout(() => {
-        const objectUrl = URL.createObjectURL(file);
-        setAvatar(objectUrl);
-        setUploadingAvatar(false);
-        
-        // Reset file input
-        e.target.value = null;
-      }, 1000);
+      // Create a local preview
+      const objectUrl = URL.createObjectURL(file);
+      setAvatarPreview(objectUrl);
+      
+      // Store the file for later upload
+      setAvatarFile(file);
+      
+      // Also update local state for UI
+      setAvatar(objectUrl);
+      setUploadingAvatar(false);
+      
+      // Reset file input
+      e.target.value = null;
     }
   };
   
-  // Update profile
+  // Update profile with avatar
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
     setError('');
@@ -310,29 +313,43 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     setLoading(true);
     
     try {
-      const response = await axios.put(
-        'http://localhost:5000/api/auth/profile',
-        profileForm,
-        {
-          headers: {
-            Authorization: `Bearer ${user.token}`
-          }
-        }
-      );
+      // Create form data to handle file upload
+      const formData = new FormData();
       
-      if (response.data.success) {
+      // Add profile form fields
+      Object.keys(profileForm).forEach(key => {
+        formData.append(key, profileForm[key]);
+      });
+      
+      // Add avatar file if exists
+      if (avatarFile) {
+        formData.append('avatar', avatarFile);
+      }
+      
+      // Use the imported updateProfile service
+      const response = await updateProfile(formData);
+      
+      if (response.success) {
         setSuccess('Profile updated successfully!');
         
-        // Update local storage and user state
-        const updatedUser = { ...user, ...profileForm, avatar };
-        localStorage.setItem('user', JSON.stringify(updatedUser));
-        setUser(updatedUser);
+        // Update user state with the response data
+        setUser(response.user);
+        
+        // Update avatar state
+        if (response.user.avatar) {
+          setAvatar(response.user.avatar);
+        }
+        
+        // Clear the file after successful upload
+        setAvatarFile(null);
         
         // Auto dismiss success message after 3 seconds
         setTimeout(() => setSuccess(''), 3000);
+      } else {
+        throw new Error(response.error || 'Failed to update profile');
       }
     } catch (error) {
-      setError(error.response?.data?.error || 'Failed to update profile');
+      setError(error.message || 'Failed to update profile');
       console.error(error);
     } finally {
       setLoading(false);
@@ -633,6 +650,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       videosUsed: 0,
       videosLimit: 10,
       status: 'inactive',
+      isActive: false,
       startDate: null,
       renewDate: null
     };
@@ -644,14 +662,58 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       'Free Plan';
       
     const isFreePlan = currentPlan === 'Free Plan' || !subscription || subscription.plan?.toLowerCase() === 'free';
+    // Determine if subscription is actually active - check both isActive flag and cancelAtPeriodEnd
+    const isSubscriptionActive = subscription.isActive && !subscription.cancelAtPeriodEnd && !subscription.isCanceled;
     const planPrice = subscription.price || (
       currentPlan.toLowerCase() === 'starter' ? 19 :
       currentPlan.toLowerCase() === 'growth' ? 49 :
       currentPlan.toLowerCase() === 'scale' ? 95 : 0
     );
-    const planStatus = subscription.status || subscription.isActive ? 'active' : 'inactive';
+    const planStatus = subscription.cancelAtPeriodEnd || subscription.isCanceled 
+      ? 'canceled' 
+      : (subscription.status || subscription.isActive ? 'active' : 'inactive');
     const startDate = subscription.startDate;
     const nextBillingDate = subscription.renewDate || subscription.endDate;
+    
+    // Determine subscription status display and UI elements
+    const determineSubscriptionStatus = () => {
+      // Explicitly canceled but still active until end of period
+      if (subscription.cancelAtPeriodEnd || subscription.isCanceled) {
+        return {
+          status: 'canceled',
+          statusText: 'Canceled',
+          statusClass: 'bg-red-500/20 text-red-500',
+          showCancelButton: false,
+          accessEndsLabel: 'Access Until',
+          nextDateLabel: 'Access Until'
+        };
+      } 
+      // Active subscription
+      else if (subscription.isActive) {
+        return {
+          status: 'active',
+          statusText: 'Active',
+          statusClass: 'bg-green-500/20 text-green-500',
+          showCancelButton: true,
+          accessEndsLabel: 'Next Billing Date',
+          nextDateLabel: 'Next Billing Date'
+        };
+      }
+      // Inactive subscription (free tier or expired)
+      else {
+        return {
+          status: 'inactive',
+          statusText: 'Inactive',
+          statusClass: 'bg-yellow-500/20 text-yellow-500',
+          showCancelButton: false,
+          accessEndsLabel: 'End Date',
+          nextDateLabel: 'End Date'
+        };
+      }
+    };
+    
+    // Get subscription status information
+    const statusInfo = determineSubscriptionStatus();
     
     // Ensure videos limit is consistent
     // If subscription comes from API, it should use the API's value
@@ -782,6 +844,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           const updatedUser = { ...user };
           if (updatedUser.subscription) {
             updatedUser.subscription.cancelAtPeriodEnd = true;
+            updatedUser.subscription.isCanceled = true;
             updatedUser.subscription.willCancelAt = response.cancelDate;
           }
           
@@ -795,28 +858,32 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           // Refresh subscription usage if available
           if (typeof setSubscriptionUsage === 'function') {
             try {
-        if (typeof loadingUsage === 'function') {
-          loadingUsage(true);
+              if (typeof loadingUsage === 'function') {
+                loadingUsage(true);
               }
               
-              const usageResponse = await subscriptionService.getSubscriptionUsage(user.token);
+              const usageResponse = await subscriptionService.getSubscriptionUsage();
               if (usageResponse && usageResponse.success) {
-              if (typeof setSubscriptionUsage === 'function') {
-                setSubscriptionUsage(usageResponse.usage);
-              } else {
-                console.log('Usage data refreshed, but setSubscriptionUsage not available:', usageResponse.usage);
+                if (typeof setSubscriptionUsage === 'function') {
+                  // Update subscription usage state with cancellation flags
+                  setSubscriptionUsage({
+                    ...usageResponse.usage,
+                    cancelAtPeriodEnd: true,
+                    isCanceled: true
+                  });
+                }
               }
-            }
-          } catch (usageError) {
-            console.error('Failed to refresh usage after cancellation:', usageError);
-          } finally {
-            if (typeof loadingUsage === 'function') {
-              loadingUsage(false);
+            } catch (usageError) {
+              console.error('Failed to refresh usage after cancellation:', usageError);
+            } finally {
+              if (typeof loadingUsage === 'function') {
+                loadingUsage(false);
               }
             }
           }
+        } else {
+          setError(response.error || 'Failed to cancel subscription. Please try again.');
         }
-        
       } catch (error) {
         setError('Failed to cancel subscription. Please try again.');
         console.error('Cancel subscription error:', error);
@@ -825,7 +892,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       }
     };
 
-    // Modal for plan selection
+    // Inside renderSubscriptionTab function, add this modal component definition
     const PlanSelectionModal = () => {
       const [selectedBillingCycle, setSelectedBillingCycle] = useState('monthly');
       
@@ -846,7 +913,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4 py-6 overflow-y-auto">
           <div className="bg-tiktok-dark rounded-xl max-w-4xl w-full p-6 md:p-8 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-bold">Change Your Plan</h2>
+              <h2 className="text-2xl font-bold">{subscription.cancelAtPeriodEnd ? 'Resubscribe' : 'Change Your Plan'}</h2>
               <button 
                 onClick={() => setShowPlanSelectionModal(false)}
                 className="text-gray-400 hover:text-white transition-colors"
@@ -858,9 +925,9 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             </div>
             
             <p className="text-gray-300 mb-4">
-              You can upgrade or downgrade your plan at any time. If you upgrade, you'll be charged the
-              prorated difference immediately. If you downgrade, your new plan will take effect at the end of your
-              current billing cycle.
+              {subscription.cancelAtPeriodEnd 
+                ? 'Choose a plan to continue your subscription. Your new plan will start immediately.'
+                : 'You can upgrade or downgrade your plan at any time. If you upgrade, you\'ll be charged the prorated difference immediately. If you downgrade, your new plan will take effect at the end of your current billing cycle.'}
             </p>
             
             {/* Billing cycle toggle */}
@@ -903,14 +970,14 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                   <div 
                     key={plan.id}
                     className={`bg-gray-900 rounded-xl p-6 border-2 ${
-                      isCurrentPlan 
+                      isCurrentPlan && !subscription.cancelAtPeriodEnd
                         ? 'border-tiktok-pink' 
                         : 'border-gray-800 hover:border-gray-700'
                     } transition-all`}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <h3 className="text-xl font-bold">{plan.name}</h3>
-                      {isCurrentPlan && (
+                      {isCurrentPlan && !subscription.cancelAtPeriodEnd && (
                         <span className="bg-tiktok-pink text-white text-xs font-medium px-2 py-1 rounded">
                           Current
                         </span>
@@ -946,9 +1013,9 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                     
                     <button
                       onClick={() => handleChangePlan(plan.id, selectedBillingCycle)}
-                      disabled={isCurrentPlan || processingCard}
+                      disabled={(isCurrentPlan && !subscription.cancelAtPeriodEnd) || processingCard}
                       className={`w-full py-3 px-4 rounded-lg font-medium transition-colors ${
-                        isCurrentPlan
+                        (isCurrentPlan && !subscription.cancelAtPeriodEnd)
                           ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
                           : 'bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white hover:opacity-90'
                       }`}
@@ -958,8 +1025,10 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                           <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
                           Processing...
                         </div>
-                      ) : isCurrentPlan ? (
+                      ) : (isCurrentPlan && !subscription.cancelAtPeriodEnd) ? (
                         'Current Plan'
+                      ) : subscription.cancelAtPeriodEnd ? (
+                        'Select Plan'
                       ) : (
                         'Select Plan'
                       )}
@@ -982,7 +1051,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                       <line x1="4" y1="16" x2="10" y2="16" strokeWidth="1.5" stroke="currentColor" />
                     </svg>
                   </div>
-                
                   
                   {/* PayPal */}
                   <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
@@ -1008,71 +1076,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       );
     };
 
-    // Modal for cancel confirmation
-    const CancelConfirmationModal = () => (
-      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4 py-6">
-        <div className="bg-tiktok-dark rounded-xl max-w-md w-full p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold">Cancel Subscription</h2>
-            <button 
-              onClick={() => setShowCancelConfirmation(false)}
-              className="text-gray-400 hover:text-white transition-colors"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          
-          <p className="text-gray-300 mb-6">
-            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing period.
-          </p>
-          
-          <div className="mb-6">
-            <label className="block text-white text-sm font-medium mb-2">
-              Why are you cancelling? (Optional)
-            </label>
-            <select
-              value={cancelReason}
-              onChange={(e) => setCancelReason(e.target.value)}
-              className="bg-gray-800 text-white rounded-lg w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none"
-            >
-              <option value="">Select a reason...</option>
-              <option value="too_expensive">Too expensive</option>
-              <option value="not_using">Not using it enough</option>
-              <option value="missing_features">Missing features I need</option>
-              <option value="switching">Switching to another service</option>
-              <option value="other">Other reason</option>
-            </select>
-          </div>
-          
-          <div className="flex space-x-4">
-            <button
-              onClick={() => setShowCancelConfirmation(false)}
-              className="flex-1 bg-gray-800 text-white py-3 px-4 rounded-lg hover:bg-gray-700 transition-colors"
-            >
-              Keep Subscription
-            </button>
-            
-            <button
-              onClick={handleCancelSubscription}
-              disabled={processingCard}
-              className="flex-1 bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition-colors"
-            >
-              {processingCard ? (
-                <div className="flex items-center justify-center">
-                  <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
-                  Processing...
-                </div>
-              ) : (
-                'Cancel Subscription'
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-
     return (
       <div className="space-y-8">
         {/* Current Plan & Summary */}
@@ -1082,16 +1085,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               <IoShieldOutline className="text-tiktok-pink text-3xl mr-4" />
               <h2 className="text-xl font-bold">{currentPlan}</h2>
             </div>
-            <span className={`${
-              subscription.cancelAtPeriodEnd || subscription.isCanceled
-                ? 'bg-red-500/20 text-red-500' 
-                : planStatus === 'active' 
-                  ? 'bg-green-500/20 text-green-500' 
-                  : 'bg-yellow-500/20 text-yellow-500'
-            } px-3 py-1 rounded-full text-sm font-medium`}>
-              {subscription.cancelAtPeriodEnd || subscription.isCanceled
-                ? 'Canceled'
-                : planStatus === 'active' ? 'Active' : 'Inactive'}
+            <span className={`${statusInfo.statusClass} px-3 py-1 rounded-full text-sm font-medium`}>
+              {statusInfo.statusText}
             </span>
           </div>
           
@@ -1107,10 +1102,10 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             </div>
             
             <div className="bg-gray-800 p-4 rounded-lg">
-              <p className="text-gray-400 text-sm mb-1">{subscription.cancelAtPeriodEnd || subscription.isCanceled ? 'Access Until' : 'Next Billing Date'}</p>
+              <p className="text-gray-400 text-sm mb-1">{statusInfo.nextDateLabel}</p>
               <p className="text-lg font-medium text-white">
                 {formatDate(nextBillingDate)}
-                {(subscription.cancelAtPeriodEnd || subscription.isCanceled) && 
+                {statusInfo.status === 'canceled' && 
                   <span className="block text-xs text-red-400 mt-1">
                     Your subscription will end on this date
                   </span>
@@ -1152,14 +1147,20 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           </div>
           
           {/* Show different action buttons based on subscription status */}
-          {(subscription.cancelAtPeriodEnd || subscription.isCanceled) ? (
+          {statusInfo.status === 'canceled' ? (
             <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-6">
               <p className="text-red-400 mb-2">
-                <span className="font-medium">Your subscription has been canceled</span> but you still have access until the end of your billing period.
+                <span className="font-medium">Your subscription has been canceled</span> but you still have access until {formatDate(nextBillingDate)}.
               </p>
               <p className="text-sm text-gray-400">
                 Want to stay with us? You can resubscribe below.
               </p>
+              <button
+                onClick={() => setShowPlanSelectionModal(true)}
+                className="mt-4 bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-medium py-3 px-4 rounded-xl hover:opacity-90 transition-colors w-full"
+              >
+                Resubscribe Now
+              </button>
             </div>
           ) : !isFreePlan ? (
             <div className="flex space-x-4">
@@ -1170,12 +1171,14 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                 Change Plan
               </button>
               
-              <button
-                onClick={() => setShowCancelConfirmation(true)}
-                className="flex-1 bg-gray-800 text-white font-medium py-3 px-4 rounded-xl hover:bg-gray-700 transition-colors"
-              >
-                Cancel
-              </button>
+              {statusInfo.showCancelButton && (
+                <button
+                  onClick={() => setShowCancelConfirmation(true)}
+                  className="flex-1 bg-gray-800 text-white font-medium py-3 px-4 rounded-xl hover:bg-gray-700 transition-colors"
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           ) : (
             <button
@@ -1464,7 +1467,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           <div className="mb-8">
             <div className="flex items-center mb-6">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-tiktok-pink h-6 w-6 mr-3">
-                <path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM16 18H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                <path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.11.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM16 18H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
               </svg>
               <h2 className="text-xl font-semibold">Billing History</h2>
             </div>
@@ -2037,7 +2040,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         if (!updatedUser.paymentMethod && updatedUser.paymentMethods.length > 0) {
           updatedUser.paymentMethod = updatedUser.paymentMethods[0];
           
-          // Also update in the database
+          // Also update the default in the database
           try {
             await setDefaultPaymentMethod(updatedUser.paymentMethod.id, user.token);
           } catch (error) {
@@ -2561,8 +2564,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     if (!show) return null;
     
     return (
-    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4">
-      <div className="bg-tiktok-dark rounded-xl p-8 max-w-md w-full">
+    <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4 py-6">
+      <div className="bg-tiktok-dark rounded-xl max-w-md w-full p-6">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-xl font-bold">Cancel Subscription</h2>
             <button 
@@ -2576,7 +2579,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         </div>
         
         <p className="text-gray-300 mb-6">
-            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing cycle.
+            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing period.
           </p>
           
           <div className="mb-6">
@@ -2615,6 +2618,135 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       </div>
     </div>
   );
+  };
+  
+  // Modal for cancel confirmation
+  const CancelConfirmationModal = () => {
+    const handleCancelSubscription = async () => {
+      setProcessingCard(true);
+      
+      try {
+        // Call API to cancel subscription
+        const response = await subscriptionService.cancelSubscription({
+          reason: cancelReason || 'No reason provided'
+        });
+        
+        if (response.success) {
+          // Update the user object
+          const updatedUser = { ...user };
+          if (updatedUser.subscription) {
+            updatedUser.subscription.cancelAtPeriodEnd = true;
+            updatedUser.subscription.isCanceled = true;
+            updatedUser.subscription.willCancelAt = response.cancelDate;
+          }
+          
+          // Update localStorage and state
+          localStorage.setItem('user', JSON.stringify(updatedUser));
+          setUser(updatedUser);
+          
+          setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
+          setShowCancelConfirmation(false);
+          
+          // Refresh subscription usage if available
+          if (typeof setSubscriptionUsage === 'function') {
+            try {
+              if (typeof loadingUsage === 'function') {
+                loadingUsage(true);
+              }
+              
+              const usageResponse = await subscriptionService.getSubscriptionUsage();
+              if (usageResponse && usageResponse.success) {
+                if (typeof setSubscriptionUsage === 'function') {
+                  // Update subscription usage state with cancellation flags
+                  setSubscriptionUsage({
+                    ...usageResponse.usage,
+                    cancelAtPeriodEnd: true,
+                    isCanceled: true
+                  });
+                }
+              }
+            } catch (usageError) {
+              console.error('Failed to refresh usage after cancellation:', usageError);
+            } finally {
+              if (typeof loadingUsage === 'function') {
+                loadingUsage(false);
+              }
+            }
+          }
+        } else {
+          setError(response.error || 'Failed to cancel subscription. Please try again.');
+        }
+      } catch (error) {
+        setError('Failed to cancel subscription. Please try again.');
+        console.error('Cancel subscription error:', error);
+      } finally {
+        setProcessingCard(false);
+      }
+    };
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 px-4 py-6">
+        <div className="bg-tiktok-dark rounded-xl max-w-md w-full p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-bold">Cancel Subscription</h2>
+            <button 
+              onClick={() => setShowCancelConfirmation(false)}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          
+          <p className="text-gray-300 mb-6">
+            Are you sure you want to cancel your subscription? You'll still have access until the end of your current billing period.
+          </p>
+          
+          <div className="mb-6">
+            <label className="block text-white text-sm font-medium mb-2">
+              Why are you cancelling? (Optional)
+            </label>
+            <select
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              className="bg-gray-800 text-white rounded-lg w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none"
+            >
+              <option value="">Select a reason...</option>
+              <option value="too_expensive">Too expensive</option>
+              <option value="not_using">Not using it enough</option>
+              <option value="missing_features">Missing features I need</option>
+              <option value="switching">Switching to another service</option>
+              <option value="other">Other reason</option>
+            </select>
+          </div>
+          
+          <div className="flex space-x-4">
+            <button
+              onClick={() => setShowCancelConfirmation(false)}
+              className="flex-1 bg-gray-800 text-white py-3 px-4 rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              Keep Subscription
+            </button>
+            
+            <button
+              onClick={handleCancelSubscription}
+              disabled={processingCard}
+              className="flex-1 bg-red-600 text-white py-3 px-4 rounded-lg hover:bg-red-700 transition-colors"
+            >
+              {processingCard ? (
+                <div className="flex items-center justify-center">
+                  <div className="w-5 h-5 border-t-2 border-white rounded-full animate-spin mr-2"></div>
+                  Processing...
+                </div>
+              ) : (
+                'Cancel Subscription'
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
   
   if (loading && !profileForm.name) {

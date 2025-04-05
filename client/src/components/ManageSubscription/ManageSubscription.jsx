@@ -95,14 +95,31 @@ const ManageSubscription = () => {
         throw new Error(response.error || 'Failed to cancel subscription');
       }
       
-      // Update subscription status
-      const subscriptionResponse = await getSubscriptionStatus();
-      if (subscriptionResponse.success) {
-        setSubscription(subscriptionResponse.subscription);
-        setShowCancelConfirm(false);
+      // Update subscription status in local state with all necessary cancellation flags
+      if (response.subscription) {
+        setSubscription({
+          ...subscription,
+          ...response.subscription,
+          cancelAtPeriodEnd: true,
+          isCanceled: true,
+          canceledAt: new Date().toISOString()
+        });
       } else {
-        setError('Subscription was canceled but failed to update status. Please refresh the page.');
+        // If subscription data is not provided in the response, update the necessary flags manually
+        setSubscription({
+          ...subscription,
+          cancelAtPeriodEnd: true,
+          isCanceled: true,
+          canceledAt: new Date().toISOString()
+        });
       }
+      
+      setShowCancelConfirm(false);
+      setError(''); // Clear any previous errors
+      
+      // Show success message
+      alert('Your subscription has been canceled. You will continue to have access until your billing period ends.');
+      
     } catch (error) {
       console.error('Error canceling subscription:', error);
       setError(error.message || 'Failed to cancel subscription. Please try again.');
@@ -136,6 +153,62 @@ const ManageSubscription = () => {
     } finally {
       setBillingLoading(false);
     }
+  };
+  
+  // Handle subscription render UI based on subscription status
+  const renderSubscriptionActions = () => {
+    // If the subscription doesn't exist or is completely inactive, show Upgrade button
+    if (!subscription || (!subscription.isActive && subscription.plan === 'free')) {
+      return (
+        <div className="flex space-x-4">
+          <Link
+            to="/pricing"
+            className="bg-gradient-to-r from-blue-500 to-tiktok-pink text-white px-4 py-2 rounded-md hover:opacity-90 transition-colors flex-1 text-center"
+          >
+            Upgrade Plan
+          </Link>
+        </div>
+      );
+    }
+    
+    // If subscription is canceled but still active until period end
+    // Check both cancelAtPeriodEnd and isCanceled flags since either could be set
+    if (subscription.cancelAtPeriodEnd || subscription.isCanceled) {
+      return (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 mb-4">
+          <p className="text-red-400 mb-2">
+            <span className="font-medium">Your subscription has been canceled</span> but you still have access until {new Date(subscription.endDate).toLocaleDateString()}.
+          </p>
+          <div className="flex space-x-4 mt-4">
+            <Link
+              to="/pricing"
+              className="bg-gradient-to-r from-blue-500 to-tiktok-pink text-white px-4 py-2 rounded-md hover:opacity-90 transition-colors flex-1 text-center"
+            >
+              Resubscribe
+            </Link>
+          </div>
+        </div>
+      );
+    }
+    
+    // Otherwise show normal actions for active subscription
+    return (
+      <div className="flex space-x-4">
+        <button
+          onClick={() => setShowChangePlan(true)}
+          className="bg-gradient-to-r from-blue-500 to-tiktok-pink text-white px-4 py-2 rounded-md hover:opacity-90 transition-colors flex-1"
+        >
+          Change Plan
+        </button>
+        
+        <button
+          onClick={() => setShowCancelConfirm(true)}
+          className="bg-gray-800 text-white px-4 py-2 rounded-md hover:bg-gray-700 transition-colors flex-1"
+        >
+          Cancel
+        </button>
+      </div>
+    );
   };
   
   if (loading) {
@@ -199,42 +272,7 @@ const ManageSubscription = () => {
               </p>
             </div>
             
-            <div className="flex space-x-3">
-              {subscription.plan !== 'free' && subscription.isActive && (
-                <>
-                  <button
-                    onClick={() => setShowChangePlan(true)}
-                    className="border border-tiktok-pink text-tiktok-pink px-4 py-2 rounded-md hover:bg-tiktok-pink hover:bg-opacity-10 transition-colors"
-                  >
-                    Change Plan
-                  </button>
-                  <button
-                    onClick={() => setShowCancelConfirm(true)}
-                    className="border border-red-500 text-red-500 px-4 py-2 rounded-md hover:bg-red-500 hover:bg-opacity-10 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </>
-              )}
-              
-              {subscription.plan === 'free' && (
-                <Link
-                  to="/pricing"
-                  className="bg-tiktok-pink text-white px-4 py-2 rounded-md hover:bg-opacity-90 transition-colors"
-                >
-                  Upgrade
-                </Link>
-              )}
-              
-              {!subscription.isActive && subscription.plan !== 'free' && (
-                <Link
-                  to="/pricing"
-                  className="bg-tiktok-pink text-white px-4 py-2 rounded-md hover:bg-opacity-90 transition-colors"
-                >
-                  Renew Subscription
-                </Link>
-              )}
-            </div>
+            {renderSubscriptionActions()}
           </div>
           
           <div className="space-y-4">

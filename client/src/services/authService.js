@@ -273,6 +273,52 @@ const refreshToken = async () => {
   }
 };
 
+// Update user profile
+const updateProfile = async (formData) => {
+  try {
+    const user = getCurrentUser();
+    
+    if (!user || !user.token) {
+      return {
+        success: false,
+        error: 'Not authenticated'
+      };
+    }
+    
+    const response = await axios.put(`${API_URL}/profile`, formData, {
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        'Content-Type': 'multipart/form-data'
+      }
+    });
+    
+    if (response.data.success) {
+      // Merge the new user data with token
+      const updatedUser = {
+        ...response.data.user,
+        token: user.token,
+        paymentMethod: response.data.user.paymentMethod || user.paymentMethod
+      };
+      
+      // Update localStorage with the merged data
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      
+      return {
+        success: true,
+        user: updatedUser
+      };
+    }
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error updating profile:', error);
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Failed to update profile'
+    };
+  }
+};
+
 // Create the service object
 const authService = {
   register,
@@ -282,7 +328,8 @@ const authService = {
   getProfile,
   getCurrentUser,
   decodeJWT,
-  refreshToken
+  refreshToken,
+  updateProfile
 };
 
 // Export both named functions and default object
@@ -294,7 +341,8 @@ export {
   getProfile,
   getCurrentUser,
   decodeJWT,
-  refreshToken
+  refreshToken,
+  updateProfile
 };
 
 export default authService; 

@@ -46,6 +46,8 @@ const PaymentForm = () => {
   const [selectedSavedMethod, setSelectedSavedMethod] = useState(null);
   const [useSavedMethod, setUseSavedMethod] = useState(false);
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
+  const [upgradeDetails, setUpgradeDetails] = useState(null);
+  const [calculatingProration, setCalculatingProration] = useState(false);
   
   // Check authentication 
   useEffect(() => {
@@ -206,6 +208,51 @@ const PaymentForm = () => {
     }
   };
   
+  // Add this function at the top level of the component
+  const findPlanById = (plans, planId) => {
+    // First try direct ID match
+    let selectedPlan = plans.find(p => p._id === planId);
+    if (selectedPlan) {
+      return { 
+        plan: selectedPlan, 
+        method: 'direct-id-match',
+        message: `Found plan directly by ID: ${selectedPlan.name}`
+      };
+    }
+    
+    // Next try numeric index (starting at 1 for UX reasons)
+    const planIndex = parseInt(planId, 10);
+    if (!isNaN(planIndex) && planIndex > 0 && planIndex <= plans.length) {
+      selectedPlan = plans[planIndex - 1];
+      return { 
+        plan: selectedPlan, 
+        method: 'numeric-index',
+        message: `Found plan by index ${planIndex}: ${selectedPlan.name}`
+      };
+    }
+    
+    // Try matching by name (case insensitive)
+    const normalizedId = planId.toLowerCase();
+    const planNames = plans.map(plan => plan.name.toLowerCase());
+    if (planNames.includes(normalizedId)) {
+      selectedPlan = plans.find(p => p.name.toLowerCase() === normalizedId);
+      if (selectedPlan) {
+        return { 
+          plan: selectedPlan, 
+          method: 'name-match',
+          message: `Found plan by name: ${selectedPlan.name}`
+        };
+      }
+    }
+    
+    // Default to first plan if nothing matched
+    return { 
+      plan: plans[0], 
+      method: 'default-first',
+      message: `No matching plan found for ID "${planId}". Defaulting to first plan: ${plans[0].name}`
+    };
+  };
+  
   // Get plan ID and billing cycle from query params
   useEffect(() => {
     if (authError) return; // Don't fetch plans if auth failed
@@ -213,6 +260,8 @@ const PaymentForm = () => {
     const queryParams = new URLSearchParams(location.search);
     const planId = queryParams.get('plan');
     const cycle = queryParams.get('cycle');
+    
+    console.log(`URL Parameters - Plan: ${planId}, Cycle: ${cycle}`);
     
     if (cycle === 'yearly' || cycle === 'monthly') {
       setBillingCycle(cycle);
@@ -256,17 +305,19 @@ const PaymentForm = () => {
         const result = await getPlans();
         
         if (result.success && result.plans) {
+          console.log('Available plans:', result.plans.map(p => `${p.name} (ID: ${p._id}, Index: ${result.plans.indexOf(p)})`));
           setPlans(result.plans);
           
           // Find the selected plan or default to first plan
           if (planId) {
-            const selectedPlan = result.plans.find(p => p._id === planId);
-            if (selectedPlan) {
-              setPlan(selectedPlan);
+            console.log(`Searching for plan with ID: ${planId}`);
+            const planResult = findPlanById(result.plans, planId);
+            console.log(planResult.message);
+            console.log(`Selected plan details: ${planResult.plan.name}, ID: ${planResult.plan._id}, Method: ${planResult.method}`);
+            
+            setPlan(planResult.plan);
             } else {
-              setPlan(result.plans[0]);
-            }
-          } else {
+            console.log('No plan ID provided, defaulting to first plan:', result.plans[0].name);
             setPlan(result.plans[0]);
           }
         } else {
@@ -282,6 +333,13 @@ const PaymentForm = () => {
     
     fetchPlans();
   }, [location, authError]);
+  
+  // Add this useEffect to log whenever the plan changes
+  useEffect(() => {
+    if (plan) {
+      console.log('Current plan set to:', plan.name, plan);
+    }
+  }, [plan]);
   
   useEffect(() => {
     if (savedPaymentMethods.length > 0) {
@@ -303,7 +361,10 @@ const PaymentForm = () => {
   useEffect(() => {
     if (paymentMethod === 'paypal' && isPaypalReady && plan && window.paypal) {
       try {
-        const price = billingCycle === 'monthly' 
+        // Use pro-rated price for upgrades, otherwise use the regular plan price
+        const price = upgradeDetails 
+          ? parseFloat(upgradeDetails.proratedUpgradeCost)
+          : billingCycle === 'monthly' 
           ? plan.monthlyPrice
           : plan.yearlyPrice;
         
@@ -330,7 +391,9 @@ const PaymentForm = () => {
                   value: price.toFixed(2),
                   currency_code: 'USD'
                 },
-                description: `${plan.name} Plan (${billingCycle})`
+                description: upgradeDetails 
+                  ? `Upgrade to ${plan.name} Plan (${billingCycle})`
+                  : `${plan.name} Plan (${billingCycle})`
               }]
             });
           },
@@ -365,19 +428,27 @@ const PaymentForm = () => {
         console.error('Error setting up PayPal:', error);
       }
     }
-  }, [paymentMethod, isPaypalReady, plan, billingCycle, navigate]);
+  }, [paymentMethod, isPaypalReady, plan, billingCycle, navigate, upgradeDetails]);
   
-  // Setup Apple Pay / Google Pay
+  // Modify the Apple Pay / Google Pay setup
   useEffect(() => {
     if (stripe && plan) {
+      const price = upgradeDetails 
+        ? parseFloat(upgradeDetails.proratedUpgradeCost) * 100 // Convert to cents for Stripe
+        : billingCycle === 'monthly' 
+          ? Math.round(plan.monthlyPrice * 100) 
+          : Math.round(plan.yearlyPrice * 100);
+      
+      const label = upgradeDetails 
+        ? `Upgrade to ${plan.name} Plan (${billingCycle})`
+        : `${plan.name} Plan (${billingCycle})`;
+      
       const pr = stripe.paymentRequest({
         country: 'US',
         currency: 'usd',
         total: {
-          label: `${plan.name} Plan (${billingCycle})`,
-          amount: billingCycle === 'monthly' 
-            ? Math.round(plan.monthlyPrice * 100) 
-            : Math.round(plan.yearlyPrice * 100),
+          label,
+          amount: price,
         },
         requestPayerName: true,
         requestPayerEmail: true,
@@ -405,7 +476,8 @@ const PaymentForm = () => {
           const result = await createPaymentIntent({
             priceId,
             paymentMethodId: ev.paymentMethod.id,
-            billingCycle
+            billingCycle,
+            isUpgrade: !!upgradeDetails
           });
           
           if (result.success) {
@@ -449,7 +521,7 @@ const PaymentForm = () => {
         }
       });
     }
-  }, [stripe, plan, billingCycle, navigate]);
+  }, [stripe, plan, billingCycle, navigate, upgradeDetails]);
   
   const cardStyle = {
     style: {
@@ -621,7 +693,9 @@ const PaymentForm = () => {
         priceId,
         paymentMethodId,
         billingCycle,
-        saveMethod: !useSavedMethod // Only save if not using a saved method
+        saveMethod: !useSavedMethod, // Only save if not using a saved method
+        isUpgrade: !!upgradeDetails,
+        proratedAmount: upgradeDetails ? upgradeDetails.proratedUpgradeCost : undefined
       });
       
       // Handle subscription status
@@ -691,6 +765,189 @@ const PaymentForm = () => {
     logout('/login?return_to=' + encodeURIComponent('/payment'));
   };
   
+  // Add a new function to calculate proration, after the findPlanById function:
+  const calculateProRatedAmount = useCallback(async (currentPlan, newPlan, cycle) => {
+    if (!currentPlan || !newPlan || currentPlan._id === newPlan._id) {
+      return null;
+    }
+
+    setCalculatingProration(true);
+    
+    try {
+      // Get the current user
+      const user = getCurrentUser();
+      if (!user || !user.subscription) {
+        return null;
+      }
+      
+      // Get plan prices based on the billing cycle
+      const currentPrice = currentPlan.name === 'Free' ? 0 : (cycle === 'monthly' ? currentPlan.monthlyPrice : currentPlan.yearlyPrice);
+      const newPrice = cycle === 'monthly' ? newPlan.monthlyPrice : newPlan.yearlyPrice;
+      
+      // Check if this is an upgrade (new price > current price)
+      if (newPrice <= currentPrice) {
+        return null; // Not an upgrade, no proration needed
+      }
+      
+      // For Free plan, we show the same rich UI but with special values
+      if (currentPlan.name === 'Free') {
+        return {
+          currentPlan: currentPlan.name,
+          newPlan: newPlan.name,
+          currentPrice: 0, // Always use 0 for Free plan (not "Free" text)
+          newPrice,
+          daysElapsed: 0,
+          daysRemaining: 30,
+          percentRemaining: '100%',
+          currentPlanUsedValue: "0.00",
+          proratedUpgradeCost: newPrice.toFixed(2),
+          savingsAmount: "0.00",
+          totalToPayNow: newPrice.toFixed(2),
+          cycleEndDate: new Date(new Date().setDate(new Date().getDate() + 30)).toLocaleDateString(),
+          isUpgrade: true,
+          fromFree: true
+        };
+      }
+      
+      // Calculate days remaining in current billing cycle
+      const now = new Date();
+      let cycleEndDate;
+      
+      if (user.subscription.cycleEndDate) {
+        cycleEndDate = new Date(user.subscription.cycleEndDate);
+      } else if (user.subscription.endDate) {
+        cycleEndDate = new Date(user.subscription.endDate);
+      } else {
+        // Fallback: Assume 30 days from now
+        cycleEndDate = new Date();
+        cycleEndDate.setDate(cycleEndDate.getDate() + 30);
+      }
+      
+      const totalDaysInCycle = 30; // Standard cycle length
+      const millisecondsPerDay = 24 * 60 * 60 * 1000;
+      
+      // Calculate days since start of cycle
+      let cycleStartDate;
+      if (user.subscription.cycleStartDate) {
+        cycleStartDate = new Date(user.subscription.cycleStartDate);
+      } else if (user.subscription.startDate) {
+        cycleStartDate = new Date(user.subscription.startDate);
+      } else {
+        // Fallback: Assume started 1 day ago
+        cycleStartDate = new Date();
+        cycleStartDate.setDate(cycleStartDate.getDate() - 1);
+      }
+      
+      const daysElapsed = Math.round((now - cycleStartDate) / millisecondsPerDay);
+      const daysRemaining = Math.max(0, totalDaysInCycle - daysElapsed);
+      const percentRemaining = daysRemaining / totalDaysInCycle;
+      
+      // Calculate used value of current plan
+      const currentPlanUsedValue = currentPrice * (1 - percentRemaining);
+      
+      // Calculate prorated cost for upgrade
+      const upgradePriceDifference = newPrice - currentPrice;
+      const proratedUpgradeCost = (upgradePriceDifference * percentRemaining).toFixed(2);
+      
+      // Return the proration details
+      return {
+        currentPlan: currentPlan.name,
+        newPlan: newPlan.name,
+        currentPrice,
+        newPrice,
+        daysElapsed,
+        daysRemaining,
+        percentRemaining: (percentRemaining * 100).toFixed(0) + '%',
+        currentPlanUsedValue: currentPlanUsedValue.toFixed(2),
+        proratedUpgradeCost,
+        savingsAmount: (upgradePriceDifference - proratedUpgradeCost).toFixed(2),
+        totalToPayNow: proratedUpgradeCost,
+        cycleEndDate: cycleEndDate.toLocaleDateString(),
+        isUpgrade: true
+      };
+    } catch (error) {
+      console.error('Error calculating proration:', error);
+      return null;
+    } finally {
+      setCalculatingProration(false);
+    }
+  }, []);
+
+  // Add a useEffect to calculate proration when the plan or billing cycle changes:
+  useEffect(() => {
+    const checkForUpgrade = async () => {
+      const user = getCurrentUser();
+      
+      // Only calculate if user has an active subscription
+      if (!user || !user.subscription || user.subscription.plan === 'free' || !plan) {
+        setUpgradeDetails(null);
+        return;
+      }
+      
+      // Get the user's current plan from their subscription
+      const currentPlanName = user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1);
+      
+      // Find the current plan in the available plans
+      const currentPlan = plans.find(p => p.name === currentPlanName);
+      
+      if (!currentPlan || currentPlan._id === plan._id) {
+        // Not an upgrade scenario
+        setUpgradeDetails(null);
+        return;
+      }
+      
+      // Check if new plan price is higher than current plan (upgrade)
+      const currentPrice = billingCycle === 'monthly' ? currentPlan.monthlyPrice : currentPlan.yearlyPrice;
+      const newPrice = billingCycle === 'monthly' ? plan.monthlyPrice : plan.yearlyPrice;
+      
+      if (newPrice > currentPrice) {
+        // Calculate proration for the upgrade
+        const details = await calculateProRatedAmount(currentPlan, plan, billingCycle);
+        setUpgradeDetails(details);
+      } else {
+        setUpgradeDetails(null);
+      }
+    };
+    
+    checkForUpgrade();
+  }, [plan, billingCycle, plans, calculateProRatedAmount]);
+  
+  // Helper function to get credit amount by plan name
+  const getCreditAmount = (planName) => {
+    if (!planName) return "";
+    
+    switch(planName.toLowerCase()) {
+      case 'free':
+        return "5";
+      case 'starter':
+        return "10";
+      case 'growth':
+        return "50";
+      case 'pro':
+        return "150";
+      default:
+        return "";
+    }
+  };
+  
+  // Helper function to get plan description based on plan name
+  const getCreditDescription = (planName) => {
+    if (!planName) return "";
+    
+    switch(planName) {
+      case 'Free':
+        return "Try it out with 5 free video credits per month";
+      case 'Starter':
+        return "Ideal for beginners with 10 video credits per month";
+      case 'Growth':
+        return "Ideal for growing creators and small businesses with 50 video credits per month";
+      case 'Pro':
+        return "Perfect for professional creators with 150 video credits per month";
+      default:
+        return "";
+    }
+  };
+  
   if (loading || !plan) {
     return (
       <div className="bg-black min-h-screen text-white py-12">
@@ -735,29 +992,76 @@ const PaymentForm = () => {
   
   return (
     <div className="bg-black min-h-screen text-white py-12">
-      <div className="container mx-auto px-4 max-w-md">
+      <div className="container mx-auto px-4 max-w-6xl">
         <h1 className="text-3xl font-bold text-center mb-8">Complete Your Purchase</h1>
         
-        <div className="bg-tiktok-dark p-6 rounded-lg mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Plan details section - Left column */}
+          <div className="bg-tiktok-dark p-6 rounded-lg">
           <h2 className="text-xl font-bold mb-4">{plan.name} Plan</h2>
-          <p className="text-gray-400 mb-4">{plan.description}</p>
-          
-          <div className="flex justify-between mb-6">
-            <span>Billing</span>
+            <p className="text-gray-400 mb-4">
+              {plan.description || getCreditDescription(plan.name)}
+            </p>
+            
+            {/* Show premium features for any paid plan (not Free), even if not upgrading */}
+            {plan.name !== 'Free' && !upgradeDetails && (
+              <div className="mt-2 mb-4 bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-blue-400 p-3 rounded-md">
+                <div className="text-white text-sm font-semibold mb-2 text-center">
+                  Premium {plan.name} Plan Features
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    <span>HD Video Quality</span>
+                  </div>
+                  <div className="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    <span>AI Voice Generation</span>
+                  </div>
+                  <div className="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    <span>{plan.name !== 'Starter' ? 'Priority' : 'Email'} Support</span>
+                  </div>
+                  <div className="flex items-center">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    <span>No Watermarks</span>
+                  </div>
+                </div>
+                <div className="text-center mt-2">
+                  <span className="inline-block bg-blue-600 px-3 py-1 rounded-full text-white text-xs font-semibold">
+                    {getCreditAmount(plan.name)} Video Credits Monthly 🚀
+                  </span>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex justify-between mb-6 items-center">
+              <span>Billing Plan</span>
+              <div className="flex items-center bg-gray-800 p-1 rounded-lg">
               <button
                 onClick={() => setBillingCycle('monthly')}
-                className={`text-sm px-2 py-1 rounded ${
-                  billingCycle === 'monthly' ? 'bg-tiktok-pink' : 'bg-gray-800'
+                  className={`text-sm px-3 py-1 rounded-md transition-all ${
+                    billingCycle === 'monthly' 
+                      ? 'bg-tiktok-pink text-white shadow' 
+                      : 'bg-transparent text-gray-300 hover:bg-gray-700'
                 }`}
               >
                 Monthly
               </button>
-              <span className="mx-2">|</span>
               <button
                 onClick={() => setBillingCycle('yearly')}
-                className={`text-sm px-2 py-1 rounded ${
-                  billingCycle === 'yearly' ? 'bg-tiktok-pink' : 'bg-gray-800'
+                  className={`text-sm px-3 py-1 rounded-md ml-1 transition-all ${
+                    billingCycle === 'yearly' 
+                      ? 'bg-tiktok-pink text-white shadow' 
+                      : 'bg-transparent text-gray-300 hover:bg-gray-700'
                 } flex items-center`}
               >
                 Yearly
@@ -769,30 +1073,212 @@ const PaymentForm = () => {
           <div className="border-t border-gray-800 pt-4 mb-4">
             <div className="flex justify-between mb-2">
               <span>Subtotal</span>
-              <span>${billingCycle === 'monthly' ? plan.monthlyPrice : plan.yearlyPrice}</span>
+                <span>
+                  {plan.name === 'Free' ? 
+                    'Free' : 
+                    `$${billingCycle === 'monthly' ? plan.monthlyPrice : plan.yearlyPrice}`
+                  }
+                </span>
             </div>
             
-            {billingCycle === 'yearly' && (
+              {billingCycle === 'yearly' && plan.name !== 'Free' && (
               <div className="flex justify-between mb-2 text-green-500">
                 <span>Yearly discount (20%)</span>
                 <span>-${(plan.monthlyPrice * 12 * 0.2).toFixed(2)}</span>
               </div>
             )}
             
-            <div className="flex justify-between font-bold text-lg mt-2">
-              <span>Total</span>
+              {/* Pro-rated upgrade calculation */}
+              {upgradeDetails && (
+                <>
+                  <div className="mt-3 border-t border-gray-700 pt-3 mb-2">
+                    <div className="bg-gradient-to-r from-tiktok-pink to-blue-500 text-white px-3 py-2 rounded-md font-semibold mb-3 text-center">
+                      Upgrade to {upgradeDetails.newPlan} and get more features today!
+                    </div>
+                    
+                    <div className="flex items-center justify-center mb-4">
+                      <div className="bg-gray-800 p-2 rounded-l-md">
+                        <div className="text-gray-400 text-xs uppercase">Current</div>
+                        <div className="font-bold">{upgradeDetails.currentPlan}</div>
+                      </div>
+                      <div className="px-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-tiktok-pink" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                        </svg>
+                      </div>
+                      <div className="bg-blue-500 bg-opacity-20 border border-blue-500 p-2 rounded-r-md">
+                        <div className="text-blue-300 text-xs uppercase">Upgrade to</div>
+                        <div className="font-bold text-white">{upgradeDetails.newPlan}</div>
+                      </div>
+                    </div>
+                    
+                    <div className="bg-gray-800 rounded-md p-3 mb-3">
+                      {/* Plans comparison in 2 columns */}
+                      <div className="grid grid-cols-2 gap-2 mb-2">
+                        <div className="text-center">
+                          <div className="text-gray-400 text-xs">Current Plan</div>
+                          <div className="text-lg font-bold">
+                            {upgradeDetails.currentPlan === 'Free' ? 
+                              'Free' : 
+                              `$${upgradeDetails.currentPrice}`
+                            }
+                          </div>
+                        </div>
+                        <div className="text-center">
+                          <div className="text-blue-300 text-xs">New Plan</div>
+                          <div className="text-lg font-bold text-white">${upgradeDetails.newPrice}</div>
+                        </div>
+                      </div>
+                      
+                      {/* Value already used - only show if there's a value */}
+                      {parseFloat(upgradeDetails.currentPlanUsedValue) > 0 && (
+                        <div className="flex justify-between items-center px-2 py-1 rounded bg-gray-700 bg-opacity-50 mb-2">
+                          <span className="text-sm text-gray-300">Used portion value</span>
+                          <span className="text-sm font-medium">-${upgradeDetails.currentPlanUsedValue}</span>
+                        </div>
+                      )}
+
+                      {/* Special message for Free plan upgrades */}
+                      {upgradeDetails && upgradeDetails.fromFree && (
+                        <div className="mt-2 bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-blue-400 p-3 rounded-md text-center mb-3">
+                          <div className="text-white text-sm font-semibold mb-1">
+                            Upgrade from Free to Premium
+                          </div>
+                          <span className="text-blue-300 text-sm">
+                            Unlock all premium features with {getCreditAmount(upgradeDetails.newPlan)}x more video credits!
+                          </span>
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-left">
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                              <span>HD Video Quality</span>
+                            </div>
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                              <span>AI Voice Generation</span>
+                            </div>
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                              <span>Priority Support</span>
+                            </div>
+                            <div className="flex items-center">
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                              </svg>
+                              <span>No Watermarks</span>
+                            </div>
+                          </div>
+                          <div className="mt-2 flex items-center justify-center">
+                            <span className="inline-block bg-blue-600 px-3 py-1 rounded-full text-white text-xs font-semibold">
+                              First Premium Upgrade 🚀
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Show upgrade deal */}
+                      <div className="mt-2 text-center bg-green-500 bg-opacity-20 border border-green-500 rounded-md p-2">
+                        <div className="text-green-300 text-xs uppercase">
+                          {upgradeDetails.fromFree ? 'Special Offer' : 'Upgrade Deal'}
+                        </div>
+                        <div className="text-green-400 font-bold text-lg">
+                          {upgradeDetails.fromFree ? 
+                            `Get ${getCreditAmount(upgradeDetails.newPlan)} monthly video credits` :
+                            parseFloat(upgradeDetails.daysRemaining) === 30 
+                              ? "Pay only the difference"
+                              : `${upgradeDetails.percentRemaining} of your billing cycle remaining`
+                          }
+                        </div>
+                        {parseFloat(upgradeDetails.savingsAmount) > 0 && (
+                          <div className="mt-1 inline-block bg-green-600 px-2 py-1 rounded text-white text-xs">
+                            You save ${upgradeDetails.savingsAmount}!
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Add benefit points for the upgrade */}
+                    <div className="mb-3">
+                      <div className="text-sm text-white mb-2">Unlock these premium features:</div>
+                      <ul className="text-sm text-gray-300">
+                        <li className="flex items-center mb-1">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          More video credits ({getCreditAmount(upgradeDetails.newPlan)} per month)
+                        </li>
+                        <li className="flex items-center mb-1">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Schedule & automate your videos
+                        </li>
+                        <li className="flex items-center">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-green-400 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                          Direct publish to TikTok
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </>
+              )}
+              
+              {/* Modify the Total/Amount Due display to handle Free plan */}
+              <div className={`flex justify-between font-bold text-lg mt-2 ${
+                upgradeDetails || plan.name !== 'Free' 
+                  ? 'bg-tiktok-pink bg-opacity-20 border border-tiktok-pink rounded-md p-2' 
+                  : ''
+              }`}>
+                <span>{
+                  upgradeDetails 
+                    ? '🎉 Amount Due Today' 
+                    : plan.name !== 'Free' 
+                      ? '💰 Total Premium Plan' 
+                      : 'Total'
+                }</span>
               <span>
-                ${billingCycle === 'monthly' 
+                  {plan.name === 'Free' && !upgradeDetails ? 
+                    'Free' : 
+                    `$${upgradeDetails 
+                        ? upgradeDetails.proratedUpgradeCost
+                        : billingCycle === 'monthly' 
                   ? plan.monthlyPrice.toFixed(2) 
-                  : plan.yearlyPrice.toFixed(2)}
+                          : plan.yearlyPrice.toFixed(2)}`
+                  }
                 <span className="text-sm text-gray-400 ml-1">
-                  /{billingCycle === 'monthly' ? 'mo' : 'yr'}
+                    {!upgradeDetails && plan.name !== 'Free' && `/${billingCycle === 'monthly' ? 'mo' : 'yr'}`}
                 </span>
               </span>
             </div>
+              
+              {upgradeDetails && (
+                <p className="text-center text-tiktok-pink text-sm mt-2 italic">
+                  {upgradeDetails.fromFree 
+                    ? `Upgrade to ${upgradeDetails.newPlan} to unlock HD quality, AI voice generation, and ${getCreditAmount(upgradeDetails.newPlan)} credits per month!`
+                    : parseFloat(upgradeDetails.daysRemaining) === 30 
+                      ? "You're getting a great deal! Upgrade now and enjoy premium features immediately!"
+                      : `Pro-rated pricing gives you immediate access to better features. Upgrade now!`
+                  }
+                </p>
+              )}
+              
+              {calculatingProration && (
+                <div className="flex items-center justify-center mt-3 text-sm text-gray-400">
+                  <div className="animate-spin h-4 w-4 border-t-2 border-b-2 border-tiktok-pink rounded-full mr-2"></div>
+                  <span>Calculating your personalized upgrade offer...</span>
+                </div>
+              )}
           </div>
         </div>
         
+          {/* Payment method section - Right column */}
         <div className="bg-tiktok-dark p-6 rounded-lg">
           <h3 className="text-xl font-bold mb-6">Payment Method</h3>
           
@@ -802,36 +1288,6 @@ const PaymentForm = () => {
               <div className="flex justify-between items-center mb-3">
                 <h4 className="font-medium">Your Payment Methods ({savedPaymentMethods.length})</h4>
                 <div className="flex items-center space-x-3">
-                  {/* <button 
-                    onClick={() => syncWithStripe()}
-                    className="text-sm text-gray-400 hover:text-white"
-                    title="Sync with Stripe to fix invalid payment methods"
-                    disabled={loadingPaymentMethods}
-                  >
-                    <span className="flex items-center">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                      </svg>
-                      Sync
-                    </span>
-                  </button>
-                  <button 
-                    onClick={() => loadSavedPaymentMethods()}
-                    className="text-sm text-gray-400 hover:text-white"
-                    title="Refresh payment methods"
-                    disabled={loadingPaymentMethods}
-                  >
-                    {loadingPaymentMethods ? (
-                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                    ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                      </svg>
-                    )}
-                  </button> */}
                   <button 
                     onClick={toggleUseSavedMethod}
                     className="text-sm text-tiktok-pink hover:underline"
@@ -940,8 +1396,12 @@ const PaymentForm = () => {
               )}
               
               <button
-                disabled={processing}
-                className="w-full bg-tiktok-pink text-white py-3 px-6 rounded-md font-semibold hover:bg-opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={processing || (plan.name === 'Free' && !upgradeDetails)}
+                  className={`w-full py-3 px-6 rounded-md font-semibold transition-all ${
+                    plan.name !== 'Free' 
+                      ? "bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:from-purple-700 hover:to-blue-700 shadow-lg hover:shadow-xl transform hover:-translate-y-1"
+                      : "bg-tiktok-pink text-white hover:bg-opacity-90"
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 {processing ? (
                   <span className="flex items-center justify-center">
@@ -952,9 +1412,23 @@ const PaymentForm = () => {
                     Processing...
                   </span>
                 ) : (
-                  `Pay $${billingCycle === 'monthly' 
-                    ? plan.monthlyPrice.toFixed(2) 
-                    : plan.yearlyPrice.toFixed(2)} with saved ${selectedSavedMethod.type === 'paypal' ? 'PayPal' : 'card'}`
+                    upgradeDetails && upgradeDetails.fromFree ? 
+                      <span className="flex items-center justify-center">
+                        <span>🚀 Unlock Premium for ${upgradeDetails.proratedUpgradeCost}</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                        </svg>
+                      </span> :
+                    upgradeDetails ? 
+                    `Upgrade Now for $${upgradeDetails.proratedUpgradeCost} with saved ${selectedSavedMethod.type === 'paypal' ? 'PayPal' : 'card'}` :
+                    plan.name === 'Free' ? 
+                    'Start Free Plan' :
+                    <span className="flex items-center justify-center">
+                      <span>🚀 Get Premium for ${billingCycle === 'monthly' ? plan.monthlyPrice.toFixed(2) : plan.yearlyPrice.toFixed(2)}</span>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    </span>
                 )}
               </button>
             </form>
@@ -1041,8 +1515,12 @@ const PaymentForm = () => {
                   )}
                   
                   <button
-                    disabled={processing || !stripe}
-                    className="w-full bg-tiktok-pink text-white py-3 px-6 rounded-md font-semibold hover:bg-opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={processing || !stripe || (plan.name === 'Free' && !upgradeDetails)}
+                      className={`w-full py-3 px-6 rounded-md font-semibold transition-all ${
+                        plan.name !== 'Free'
+                          ? "bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:from-purple-700 hover:to-blue-700 shadow-lg hover:shadow-xl transform hover:-translate-y-1"
+                          : "bg-tiktok-pink text-white hover:bg-opacity-90"
+                      } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     {processing ? (
                       <span className="flex items-center justify-center">
@@ -1052,18 +1530,37 @@ const PaymentForm = () => {
                         </svg>
                         Processing...
                       </span>
-                    ) : (
-                      `Pay $${billingCycle === 'monthly' 
-                        ? plan.monthlyPrice.toFixed(2) 
-                        : plan.yearlyPrice.toFixed(2)}`
-                    )}
+                      ) : upgradeDetails && upgradeDetails.fromFree ? 
+                        <span className="flex items-center justify-center">
+                          <span>🚀 Unlock Premium for ${upgradeDetails.proratedUpgradeCost}</span>
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                          </svg>
+                        </span> :
+                        upgradeDetails ? 
+                          `Upgrade Now for $${upgradeDetails.proratedUpgradeCost}` :
+                          plan.name === 'Free' ? 
+                            'Start Free Plan' :
+                            <span className="flex items-center justify-center">
+                              <span>🚀 Get Premium for ${billingCycle === 'monthly' ? plan.monthlyPrice.toFixed(2) : plan.yearlyPrice.toFixed(2)}</span>
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M10.293 5.293a1 1 0 011.414 0l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414-1.414L12.586 11H5a1 1 0 110-2h7.586l-2.293-2.293a1 1 0 010-1.414z" clipRule="evenodd" />
+                              </svg>
+                            </span>
+                      }
                   </button>
                 </form>
               )}
             </>
           )}
           
+            {/* Add explanatory text before subscription renewal message */}
           <p className="text-center text-sm text-gray-400 mt-4">
+              {!upgradeDetails && plan.name !== 'Free' ? (
+                <span className="text-tiktok-pink italic mb-2 block">
+                  Get started with {plan.name} and enjoy HD videos, AI voice generation, and {getCreditAmount(plan.name)} monthly credits!
+                </span>
+              ) : null}
             Your subscription will automatically renew each {billingCycle === 'monthly' ? 'month' : 'year'}.
             You can cancel anytime.
           </p>
@@ -1078,6 +1575,7 @@ const PaymentForm = () => {
           <div className="mt-6 text-center text-xs text-gray-500">
             <p>Secure payment processing by Stripe</p>
             <p className="mt-1">Your payment information is encrypted and secure</p>
+            </div>
           </div>
         </div>
       </div>

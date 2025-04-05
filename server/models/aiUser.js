@@ -69,11 +69,17 @@ const aiUserSchema = new mongoose.Schema({
     endDate: {
       type: Date
     },
-    videosUsed: {
+    cycleStartDate: {
+      type: Date
+    },
+    cycleEndDate: {
+      type: Date
+    },
+    creditsUsed: {
       type: Number,
       default: 0
     },
-    videosLimit: {
+    creditsTotal: {
       type: Number,
       default: 0
     },
@@ -88,6 +94,15 @@ const aiUserSchema = new mongoose.Schema({
     },
     canceledAt: {
       type: Date
+    },
+    pendingDowngrade: {
+      plan: {
+        type: String,
+        enum: ['free', 'starter', 'growth', 'scale']
+      },
+      scheduledDate: {
+        type: Date
+      }
     }
   },
   createdAt: {

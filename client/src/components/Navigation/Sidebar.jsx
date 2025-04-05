@@ -17,6 +17,7 @@ import {
   IoPersonOutline
 } from 'react-icons/io5';
 import { getSubscriptionUsage } from '../../services/subscriptionService';
+import { getProfile } from '../../services/authService';
 
 // TikTok logo SVG
 const TikTokLogo = () => (
@@ -37,6 +38,26 @@ const Sidebar = ({ user, onLogout }) => {
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
   const [subscriptionUsage, setSubscriptionUsage] = useState(null);
   const [loadingUsage, setLoadingUsage] = useState(true);
+  const [refreshedUser, setRefreshedUser] = useState(user);
+  
+  // Refresh user data when component mounts to get the latest avatar URL
+  useEffect(() => {
+    const refreshUserData = async () => {
+      try {
+        const result = await getProfile();
+        if (result.success) {
+          setRefreshedUser(result.user);
+        }
+      } catch (error) {
+        console.error('Sidebar: Error refreshing user data:', error);
+      }
+    };
+    
+    refreshUserData();
+  }, []);
+  
+  // Use the most up-to-date user data
+  const currentUser = refreshedUser || user;
   
   // Fetch subscription usage data when component mounts or route changes
   useEffect(() => {
@@ -45,7 +66,7 @@ const Sidebar = ({ user, onLogout }) => {
         setLoadingUsage(true);
         
         // Only fetch if we have a user with a token
-        if (!user || !user.token) {
+        if (!currentUser || !currentUser.token) {
           console.log('Skipping subscription usage fetch - no authenticated user');
           setSubscriptionUsage(null);
           return;
@@ -70,12 +91,12 @@ const Sidebar = ({ user, onLogout }) => {
     };
     
     // Only attempt to fetch if user is logged in
-    if (user && user.token) {
+    if (currentUser && currentUser.token) {
       fetchSubscriptionUsage();
     } else {
       setLoadingUsage(false);
     }
-  }, [user, location.pathname]);
+  }, [currentUser, location.pathname]);
   
   // Generate CSS classes for menu items
   const getMenuItemClasses = (path) => {
@@ -87,7 +108,7 @@ const Sidebar = ({ user, onLogout }) => {
   };
   
   // Only render sidebar if user is logged in and not on landing page
-  if (!user || location.pathname === '/') {
+  if (!currentUser || location.pathname === '/') {
     return null;
   }
 
@@ -107,19 +128,19 @@ const Sidebar = ({ user, onLogout }) => {
   // Calculate video usage metrics
   const videosRemaining = subscriptionUsage 
     ? subscriptionUsage.videosRemaining 
-    : (user.subscription?.videosLimit - user.subscription?.videosUsed) || 5;
+    : (currentUser.subscription?.videosLimit - currentUser.subscription?.videosUsed) || 5;
     
   const daysRemaining = subscriptionUsage 
     ? subscriptionUsage.daysUntilReset 
-    : user.subscription?.endDate 
-      ? Math.ceil((new Date(user.subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)) 
+    : currentUser.subscription?.endDate 
+      ? Math.ceil((new Date(currentUser.subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)) 
       : 30;
       
   // Calculate the percentage of videos used
   const usagePercentage = subscriptionUsage 
     ? ((subscriptionUsage.videosUsed || 0) / (subscriptionUsage.videosLimit || 1)) * 100 
-    : user.subscription?.videosLimit 
-      ? ((user.subscription?.videosUsed || 0) / user.subscription.videosLimit) * 100 
+    : currentUser.subscription?.videosLimit 
+      ? ((currentUser.subscription?.videosUsed || 0) / currentUser.subscription.videosLimit) * 100 
       : 50;
   
   return (
@@ -158,7 +179,7 @@ const Sidebar = ({ user, onLogout }) => {
             <span>Videos</span>
           </Link>
           
-          <Link to="/schedule" className={getMenuItemClasses("/schedule")}>
+          {/* <Link to="/schedule" className={getMenuItemClasses("/schedule")}>
             <IoCalendarOutline className="text-xl" />
             <span>Schedule</span>
           </Link>
@@ -166,7 +187,7 @@ const Sidebar = ({ user, onLogout }) => {
           <Link to="/campaigns" className={getMenuItemClasses("/campaigns")}>
             <IoRocketOutline className="text-xl" />
             <span>Campaigns</span>
-          </Link>
+          </Link> */}
         </nav>
         
         {/* Divider */}
@@ -220,16 +241,28 @@ const Sidebar = ({ user, onLogout }) => {
             className="w-full px-4 py-4 flex items-center hover:bg-gray-800 transition duration-200"
           >
             <div className="flex items-center flex-grow">
-              {user.avatar ? (
-                <img src={user.avatar} alt={user.name} className="h-10 w-10 rounded-full border-2 border-tiktok-pink" />
+              {currentUser.avatar ? (
+                <img 
+                  src={currentUser.avatar} 
+                  alt={currentUser.name} 
+                  className="h-10 w-10 rounded-full border-2 border-tiktok-pink"
+                  onError={(e) => {
+                    console.error('Error loading avatar image:', e);
+                    e.target.onerror = null;
+                    e.target.src = ''; // Clear src on error
+                    // Use initial fallback
+                    e.target.style.display = 'none';
+                    e.target.parentElement.querySelector('.avatar-fallback').style.display = 'flex';
+                  }} 
+                />
               ) : (
-                <div className="h-10 w-10 rounded-full bg-gradient-to-r from-tiktok-blue to-tiktok-pink flex items-center justify-center text-white font-bold">
-                  {user.name?.charAt(0)}
+                <div className="h-10 w-10 rounded-full bg-gradient-to-r from-tiktok-blue to-tiktok-pink flex items-center justify-center text-white font-bold avatar-fallback">
+                  {currentUser.name?.charAt(0)}
                 </div>
               )}
               <div className="ml-3 flex-grow overflow-hidden">
-                <p className="text-sm font-medium text-white truncate">{user.name}</p>
-                <p className="text-xs text-gray-400 truncate">{user.email}</p>
+                <p className="text-sm font-medium text-white truncate">{currentUser.name}</p>
+                <p className="text-xs text-gray-400 truncate">{currentUser.email}</p>
               </div>
               {profileDropdownOpen ? (
                 <IoChevronUpOutline className="text-gray-400 ml-2" />

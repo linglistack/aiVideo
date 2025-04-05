@@ -199,34 +199,39 @@ const createSubscription = async (userId, priceId, paymentMethodId, saveMethod =
   }
 };
 
-// Cancel a subscription
-const cancelSubscription = async (userId) => {
+/**
+ * Cancel a subscription
+ */
+const cancelSubscription = async (subscriptionId) => {
   try {
-    const user = await aiUser.findById(userId);
+    // Retrieve the subscription
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     
-    if (!user?.subscription?.stripeSubscriptionId) {
-      throw new Error('No active subscription found');
+    if (!subscription) {
+      return {
+        success: false,
+        error: 'Subscription not found'
+      };
     }
     
-    // Cancel the subscription at period end
-    const subscription = await stripe.subscriptions.update(
-      user.subscription.stripeSubscriptionId,
-      { cancel_at_period_end: true }
-    );
-    
-    // Update user record with comprehensive cancellation details
-    await aiUser.findByIdAndUpdate(userId, {
-      'subscription.isActive': false,
-      'subscription.canceledAt': new Date(),
-      'subscription.status': 'canceled',
-      'subscription.cancelAtPeriodEnd': true,
-      'subscription.isCanceled': true
+    // Cancel the subscription at period end (so user keeps credits for current cycle)
+    const canceled = await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+      metadata: {
+        canceledAt: new Date().toISOString()
+      }
     });
     
-    return subscription;
+    return {
+      success: true,
+      subscription: canceled
+    };
   } catch (error) {
     console.error('Error canceling subscription:', error);
-    throw error;
+    return {
+      success: false,
+      error: error.message
+    };
   }
 };
 
@@ -280,11 +285,121 @@ const createBillingPortalSession = async (userId, returnUrl) => {
   }
 };
 
+/**
+ * Update subscription with new price
+ * Used for upgrades with prorated price calculation
+ */
+const updateSubscription = async (customerId, subscriptionId, newPriceId, proratedAmount) => {
+  try {
+    // Retrieve the subscription
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    
+    if (!subscription) {
+      return {
+        success: false,
+        error: 'Subscription not found'
+      };
+    }
+    
+    // Update the subscription with the new price ID
+    const updatedSubscription = await stripe.subscriptions.update(subscriptionId, {
+      proration_behavior: 'create_prorations',
+      items: [
+        {
+          id: subscription.items.data[0].id,
+          price: newPriceId
+        }
+      ],
+      metadata: {
+        proratedAmount: proratedAmount.toString(),
+        upgradeDate: new Date().toISOString()
+      }
+    });
+    
+    return {
+      success: true,
+      subscription: updatedSubscription
+    };
+  } catch (error) {
+    console.error('Error updating subscription:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
+/**
+ * Schedule a subscription update at the end of the current billing cycle
+ * Used for downgrades without proration
+ */
+const scheduleSubscriptionUpdate = async (customerId, subscriptionId, newPriceId) => {
+  try {
+    // Retrieve the subscription
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    
+    if (!subscription) {
+      return {
+        success: false,
+        error: 'Subscription not found'
+      };
+    }
+    
+    // Get the current phase end date
+    const currentPeriodEnd = subscription.current_period_end;
+    const effectiveDate = new Date(currentPeriodEnd * 1000);
+    
+    // Schedule the update at the end of the current billing cycle
+    const subscriptionSchedule = await stripe.subscriptionSchedules.create({
+      from_subscription: subscriptionId,
+      phases: [
+        {
+          start_date: 'now',
+          end_date: currentPeriodEnd,
+          items: [
+            {
+              price: subscription.items.data[0].price.id,
+              quantity: 1
+            }
+          ]
+        },
+        {
+          start_date: currentPeriodEnd,
+          items: [
+            {
+              price: newPriceId,
+              quantity: 1
+            }
+          ],
+          iterations: 1, // Apply this phase once
+          metadata: {
+            downgradeDate: effectiveDate.toISOString()
+          }
+        }
+      ]
+    });
+    
+    return {
+      success: true,
+      subscriptionSchedule,
+      effectiveDate
+    };
+  } catch (error) {
+    console.error('Error scheduling subscription update:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
 module.exports = {
   createCustomer,
   getOrCreateCustomer,
   createSubscription,
   cancelSubscription,
   createCheckoutSession,
-  createBillingPortalSession
+  createBillingPortalSession,
+  updateSubscription,
+  scheduleSubscriptionUpdate
 }; 

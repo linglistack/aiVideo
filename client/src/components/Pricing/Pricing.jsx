@@ -41,6 +41,13 @@ const Pricing = () => {
     try {
       setProcessingPlanId(plan._id);
       setError(null); // Clear any previous errors
+      
+      // For direct payment form rather than Stripe Checkout
+      console.log(`Redirecting to payment form for plan: ${plan.name} (ID: ${plan._id})`);
+      navigate(`/payment?plan=${plan._id}&cycle=${billingCycle}`);
+      
+      // The code below is for Stripe Checkout - commented out since we're using our custom form
+      /*
       const priceId = billingCycle === 'monthly' ? plan.monthlyPriceId : plan.yearlyPriceId;
       
       console.log('Creating checkout session for price:', priceId);
@@ -56,8 +63,9 @@ const Pricing = () => {
         // Show error message
         setError(response.error || 'Failed to create checkout session');
       }
+      */
     } catch (error) {
-      console.error('Error creating checkout session:', error);
+      console.error('Error navigating to payment form:', error);
       // Extract the most useful error message
       let errorMessage = 'Something went wrong. Please try again or log out and back in.';
       
