@@ -1,53 +1,71 @@
 const express = require('express');
 const cors = require('cors');
 const dotenv = require('dotenv');
-const connectDB = require('./config/db');
 const path = require('path');
-const { initSubscriptionScheduler } = require('./services/subscriptionScheduler');
 const mongoose = require('mongoose');
 
+// Configure environment variables
 dotenv.config();
 
-// Connect to database - wrapped in try/catch to prevent unhandled rejections
-try {
-  // Connect asynchronously but don't wait for it here
-  connectDB().catch(error => {
-    console.error('Database connection failed:', error.message);
-    // Don't exit process in serverless environment
-  });
-} catch (error) {
-  console.error('Database connection error:', error.message);
-}
-
+// Create Express app
 const app = express();
 
-// Middleware
+// CORS configuration
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? [process.env.CLIENT_URL || 'https://aivideo.vercel.app'] 
     : 'http://localhost:3000',
   credentials: true
 }));
+
+// Request body parsers
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Serve static files from the uploads directory - conditional for serverless
+// Only serve static files in development
 if (process.env.NODE_ENV !== 'production') {
   app.use('/api/uploads', express.static(path.join(__dirname, 'uploads')));
 }
 
-// Routes
-const authRoutes = require('./routes/authRoutes');
-const subscriptionRoutes = require('./routes/subscriptionRoutes');
-const videoRoutes = require('./routes/videoRoutes');
-const paymentRoutes = require('./routes/paymentRoutes');
-const contactRoutes = require('./routes/contactRoutes');
+// Basic route for testing
+app.get('/', (req, res) => {
+  res.json({ message: 'API is running', timestamp: new Date().toISOString() });
+});
 
-app.use('/api/auth', authRoutes);
-app.use('/api/subscriptions', subscriptionRoutes);
-app.use('/api/videos', videoRoutes);
-app.use('/api/payments', paymentRoutes);
-app.use('/api/contact', contactRoutes);
+// Health check route that doesn't depend on database
+app.get('/health', async (req, res) => {
+  const health = {
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+    environment: process.env.NODE_ENV || 'development',
+    vercel: process.env.VERCEL === '1',
+    vercelEnv: process.env.VERCEL_ENV,
+    env: {
+      mongoUri: Boolean(process.env.MONGODB_URI),
+      jwtSecret: Boolean(process.env.JWT_SECRET),
+      cloudinary: Boolean(process.env.CLOUDINARY_CLOUD_NAME)
+    }
+  };
+  
+  // Add database status if possible
+  try {
+    health.database = {
+      readyState: mongoose.connection.readyState,
+      connected: mongoose.connection.readyState === 1
+    };
+  } catch (e) {
+    health.database = { error: 'Not connected' };
+  }
+  
+  res.json(health);
+});
+
+// Routes - lazy load them only when needed
+app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/subscriptions', require('./routes/subscriptionRoutes'));
+app.use('/api/videos', require('./routes/videoRoutes'));
+app.use('/api/payments', require('./routes/paymentRoutes'));
+app.use('/api/contact', require('./routes/contactRoutes'));
 
 // Special route for Stripe webhooks (needs raw body)
 app.post('/api/subscriptions/webhook', 
@@ -55,93 +73,60 @@ app.post('/api/subscriptions/webhook',
   require('./controllers/subscriptionController').handleWebhook
 );
 
-// Basic route for testing
-app.get('/', (req, res) => {
-  res.json({ message: 'API is running' });
-});
-
-// Health check route for debugging
-app.get('/health', async (req, res) => {
-  const health = {
-    uptime: process.uptime(),
-    timestamp: Date.now(),
-    environment: process.env.NODE_ENV || 'development',
-    vercelEnv: process.env.VERCEL_ENV || 'local',
-    database: {
-      status: 'disconnected'
-    },
-    cloudinary: {
-      status: 'unknown'
-    }
-  };
-
-  try {
-    // Check database connection
-    if (mongoose.connection.readyState === 1) {
-      health.database = {
-        status: 'connected',
-        name: mongoose.connection.db.databaseName
-      };
-    } else {
-      health.database = {
-        status: 'disconnected',
-        readyState: mongoose.connection.readyState
-      };
-    }
-  } catch (e) {
-    health.database = {
-      status: 'error',
-      error: e.message
-    };
-  }
-
-  // Check if environment variables are set (don't expose actual values)
-  health.envCheck = {
-    mongodb: Boolean(process.env.MONGODB_URI),
-    jwt: Boolean(process.env.JWT_SECRET),
-    cloudinary: Boolean(process.env.CLOUDINARY_CLOUD_NAME && 
-                        process.env.CLOUDINARY_API_KEY && 
-                        process.env.CLOUDINARY_API_SECRET)
-  };
-
-  // Return health status
-  res.json(health);
-});
-
 // Global error handler
 app.use((err, req, res, next) => {
-    console.error('Server error:', err.stack);
-    res.status(500).json({
-        success: false,
-        error: err.message || 'Something went wrong!'
-    });
+  console.error('Server error:', err.stack);
+  res.status(500).json({
+    success: false,
+    error: err.message || 'Something went wrong!'
+  });
 });
 
 // 404 handler
 app.use((req, res) => {
-    res.status(404).json({
-        success: false,
-        error: 'Route not found'
-    });
+  res.status(404).json({
+    success: false,
+    error: 'Route not found'
+  });
 });
 
-// Initialize the subscription scheduler in development only
-// Long-running processes won't work in serverless
+// Only initialize scheduler and listen on port in development
 if (process.env.NODE_ENV !== 'production') {
-    try {
-        initSubscriptionScheduler();
-    } catch (error) {
-        console.error('Failed to initialize scheduler:', error);
-    }
-}
-
-// For local development
-if (process.env.NODE_ENV !== 'production') {
+  try {
+    const { initSubscriptionScheduler } = require('./services/subscriptionScheduler');
+    initSubscriptionScheduler();
+    
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
+      console.log(`Server running on port ${PORT}`);
     });
+  } catch (error) {
+    console.error('Development server setup error:', error);
+  }
 }
 
-// Export for Vercel serverless deployment
+// Connect to database on first request (lazy loading for serverless)
+app.use(async (req, res, next) => {
+  // Skip DB connection for health checks
+  if (req.path === '/health' || req.path === '/health-minimal') {
+    return next();
+  }
+  
+  try {
+    // Only connect if not already connected
+    if (mongoose.connection.readyState !== 1) {
+      const connectDB = require('./config/db');
+      await connectDB();
+    }
+    next();
+  } catch (error) {
+    console.error('Database connection error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Database connection failed'
+    });
+  }
+});
+
+// Export for serverless
 module.exports = app; 
