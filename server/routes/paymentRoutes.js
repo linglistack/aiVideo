@@ -1,39 +1,42 @@
 const express = require('express');
 const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
-const fs = require('fs');
-const path = require('path');
 const aiUser = require('../models/aiUser');
 const Payment = require('../models/Payment');
 
-// File paths for persisting data (fallback for demo/development)
-const dataDir = path.join(__dirname, '..', 'data');
-const paymentMethodsFile = path.join(dataDir, 'paymentMethods.json');
-const paymentHistoryFile = path.join(dataDir, 'paymentHistory.json');
-
-// Create data directory if it doesn't exist
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
-}
-
-// Load payment history from file or initialize if not exists
+// Load payment history from database instead of file
 let paymentHistory = {};
 
-try {
-  if (fs.existsSync(paymentHistoryFile)) {
-    paymentHistory = JSON.parse(fs.readFileSync(paymentHistoryFile, 'utf8'));
-    console.log('Loaded payment history from file');
-  }
-} catch (error) {
-  console.error('Error loading payment data:', error);
-}
-
-// Helper function to save payment history to file
-const savePaymentHistoryToFile = () => {
+// Helper function to get payment history from database
+const getPaymentHistory = async (userId) => {
   try {
-    fs.writeFileSync(paymentHistoryFile, JSON.stringify(paymentHistory, null, 2));
+    const payments = await Payment.find({ userId });
+    if (payments.length > 0) {
+      const history = {};
+      payments.forEach(payment => {
+        history[payment.paymentId] = payment.toObject();
+      });
+      return history;
+    }
+    return {};
   } catch (error) {
-    console.error('Error saving payment history to file:', error);
+    console.error('Error fetching payment history:', error);
+    return {};
+  }
+};
+
+// Helper function to save payment history to database
+const savePaymentHistoryToDatabase = async (userId, paymentId, paymentData) => {
+  try {
+    await Payment.findOneAndUpdate(
+      { userId, paymentId },
+      paymentData,
+      { upsert: true, new: true }
+    );
+    return true;
+  } catch (error) {
+    console.error('Error saving payment to database:', error);
+    return false;
   }
 };
 
