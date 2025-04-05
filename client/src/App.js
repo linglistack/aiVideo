@@ -22,6 +22,7 @@ import PaymentForm from './components/PaymentForm/PaymentForm';
 import PaymentSuccess from './components/PaymentSuccess/PaymentSuccess';
 import ManageSubscription from './components/ManageSubscription/ManageSubscription';
 import Account from './components/Account/Account';
+import ApiUrlInfo from './components/ApiUrlInfo';
 
 // Load Stripe outside of component render to avoid recreating Stripe object
 const stripePromise = loadStripe(process.env.REACT_APP_STRIPE_PUBLIC_KEY);
@@ -453,6 +454,8 @@ function App() {
             setUser={handleLogin}
             handleLogout={handleLogout} 
           />
+          {/* API URL info component - only shows in development by default */}
+          <ApiUrlInfo />
         </Elements>
       </BrowserRouter>
     </GoogleOAuthProvider>
