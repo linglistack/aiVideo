@@ -3,13 +3,26 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true
-});
+// Initialize Cloudinary with error handling
+try {
+  // Check if environment variables are set
+  if (!process.env.CLOUDINARY_CLOUD_NAME || 
+      !process.env.CLOUDINARY_API_KEY || 
+      !process.env.CLOUDINARY_API_SECRET) {
+    console.error('Cloudinary environment variables are missing');
+  } else {
+    // Configure Cloudinary
+    cloudinary.config({
+      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+      api_key: process.env.CLOUDINARY_API_KEY,
+      api_secret: process.env.CLOUDINARY_API_SECRET,
+      secure: true
+    });
+    console.log('Cloudinary configured successfully');
+  }
+} catch (error) {
+  console.error('Cloudinary configuration error:', error);
+}
 
 /**
  * Upload a file to Cloudinary
@@ -19,6 +32,11 @@ cloudinary.config({
  */
 const uploadFile = (fileBuffer, options = {}) => {
   return new Promise((resolve, reject) => {
+    // Validate configuration
+    if (!process.env.CLOUDINARY_CLOUD_NAME) {
+      return reject(new Error('Cloudinary is not properly configured'));
+    }
+    
     // Set default options
     const uploadOptions = {
       folder: options.folder || 'aivideo',
@@ -38,11 +56,15 @@ const uploadFile = (fileBuffer, options = {}) => {
     );
 
     // Convert buffer to stream and pipe to uploadStream
-    const Readable = require('stream').Readable;
-    const readableStream = new Readable();
-    readableStream.push(fileBuffer);
-    readableStream.push(null);
-    readableStream.pipe(uploadStream);
+    try {
+      const Readable = require('stream').Readable;
+      const readableStream = new Readable();
+      readableStream.push(fileBuffer);
+      readableStream.push(null);
+      readableStream.pipe(uploadStream);
+    } catch (error) {
+      reject(error);
+    }
   });
 };
 
@@ -52,7 +74,12 @@ const uploadFile = (fileBuffer, options = {}) => {
  * @returns {Promise<Object>} Cloudinary delete result
  */
 const deleteFile = async (publicId) => {
-  return cloudinary.uploader.destroy(publicId);
+  try {
+    return await cloudinary.uploader.destroy(publicId);
+  } catch (error) {
+    console.error('Error deleting file from Cloudinary:', error);
+    throw error;
+  }
 };
 
 /**
@@ -62,7 +89,12 @@ const deleteFile = async (publicId) => {
  * @returns {string} The URL of the file
  */
 const getFileUrl = (publicId, options = {}) => {
-  return cloudinary.url(publicId, options);
+  try {
+    return cloudinary.url(publicId, options);
+  } catch (error) {
+    console.error('Error generating Cloudinary URL:', error);
+    return '';
+  }
 };
 
 module.exports = {
