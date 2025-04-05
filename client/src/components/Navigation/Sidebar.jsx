@@ -73,7 +73,7 @@ const Sidebar = ({ user, onLogout }) => {
         }
         
         const response = await getSubscriptionUsage();
-        
+        console.log('ssss', response, currentUser)
         if (response.success) {
           setSubscriptionUsage(response.usage);
         } else {
@@ -126,9 +126,7 @@ const Sidebar = ({ user, onLogout }) => {
   };
   
   // Calculate video usage metrics
-  const videosRemaining = subscriptionUsage 
-    ? subscriptionUsage.videosRemaining 
-    : (currentUser.subscription?.videosLimit - currentUser.subscription?.videosUsed) || 5;
+  const videosRemaining = (currentUser.subscription?.videosLimit - currentUser.subscription?.videosUsed) || 5;
     
   const daysRemaining = subscriptionUsage 
     ? subscriptionUsage.daysUntilReset 

@@ -4,6 +4,7 @@ const { protect } = require('../middleware/authMiddleware');
 const fs = require('fs');
 const path = require('path');
 const aiUser = require('../models/aiUser');
+const Payment = require('../models/Payment');
 
 // File paths for persisting data (fallback for demo/development)
 const dataDir = path.join(__dirname, '..', 'data');
@@ -230,39 +231,49 @@ router.delete('/methods/:id', protect, async (req, res) => {
  * @desc    Get user's payment history
  * @access  Private
  */
-router.get('/history', protect, (req, res) => {
+router.get('/history', protect, async (req, res) => {
   try {
-    // In a real app, you would fetch payment history from your database
-    const userPaymentHistory = paymentHistory[req.user._id] || [];
+    // Find payment records for this user in the database
+    const userPayments = await Payment.find({ 
+      userId: req.user._id 
+    }).sort({ date: -1 }); // Sort by date in descending order (newest first)
     
-    // For the demo, if no payment history exists, create a mock entry
-    if (userPaymentHistory.length === 0 && process.env.NODE_ENV === 'development') {
+    // Map payment records to the format expected by the frontend
+    const paymentHistory = userPayments.map(payment => ({
+      id: payment.paymentId,
+      invoiceId: payment.invoiceId,
+      date: payment.date,
+      amount: payment.amount,
+      plan: payment.plan,
+      billingCycle: payment.billingCycle,
+      status: payment.status,
+      receiptUrl: payment.receiptUrl,
+      receiptNumber: payment.receiptNumber
+    }));
+    
+    // If there are no payment records in the database but we're in development,
+    // you can optionally return a mock record for testing
+    if (paymentHistory.length === 0 && process.env.NODE_ENV === 'development') {
       const mockPayment = {
         id: `pi_${Date.now()}`,
         date: new Date().toISOString(),
         amount: 19,
         plan: 'Starter',
-        status: 'succeeded'
+        billingCycle: 'monthly',
+        status: 'succeeded',
+        receiptUrl: 'https://example.com/receipt'
       };
-      
-      if (!paymentHistory[req.user._id]) {
-        paymentHistory[req.user._id] = [];
-      }
-      
-      paymentHistory[req.user._id].push(mockPayment);
-      
-      // Save payment history to file
-      savePaymentHistoryToFile();
       
       return res.json({
         success: true,
-        history: [mockPayment]
+        payments: [mockPayment]
       });
     }
     
+    // Return payment history
     res.json({
       success: true,
-      history: userPaymentHistory
+      payments: paymentHistory
     });
   } catch (error) {
     console.error('Get payment history error:', error);

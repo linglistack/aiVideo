@@ -5,6 +5,7 @@ const Plan = require('../models/Plan');
 const aiUser = require('../models/aiUser');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const subscriptionScheduler = require('../services/subscriptionScheduler');
+const Payment = require('../models/Payment');
 
 // Plan configurations
 const PLANS = {
@@ -367,7 +368,7 @@ const createCheckoutSession = async (req, res) => {
 // Create payment intent (for custom payment form)
 const createPaymentIntent = async (req, res) => {
   try {
-    const { priceId, paymentMethodId, saveMethod = true } = req.body;
+    const { priceId, paymentMethodId, saveMethod = true, billingCycle } = req.body;
     
     if (!priceId || !paymentMethodId) {
       return res.status(400).json({
@@ -383,6 +384,68 @@ const createPaymentIntent = async (req, res) => {
         paymentMethodId,
         saveMethod
       );
+      
+      // Create a payment record directly here, so we don't rely solely on the webhook
+      try {
+        // Get plan details for the payment record
+        const plan = await Plan.findOne({
+          $or: [
+            { monthlyPriceId: priceId },
+            { yearlyPriceId: priceId }
+          ]
+        });
+        
+        if (plan) {
+          // Get payment method details
+          const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+          
+          // Format payment method for storage
+          const paymentMethodData = paymentMethod ? {
+            id: paymentMethod.id,
+            brand: paymentMethod.card?.brand || 'unknown',
+            last4: paymentMethod.card?.last4 || '****',
+            expMonth: paymentMethod.card?.exp_month?.toString() || '',
+            expYear: paymentMethod.card?.exp_year?.toString() || ''
+          } : null;
+          
+          // Get the invoice and payment intent information from the subscription
+          const invoiceId = subscription.latest_invoice?.id;
+          const paymentIntentId = subscription.latest_invoice?.payment_intent?.id;
+          
+          // Determine billing cycle (monthly/yearly)
+          const isYearly = billingCycle === 'yearly' || priceId === plan.yearlyPriceId;
+          
+          // Calculate amount based on the plan
+          const amount = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
+          
+          // Create a new payment record
+          const paymentRecord = new Payment({
+            userId: req.user._id,
+            paymentId: paymentIntentId || `pi_manual_${Date.now()}`,
+            invoiceId: invoiceId || `in_manual_${Date.now()}`,
+            subscriptionId: subscription.id,
+            customerId: subscription.customer,
+            date: new Date(),
+            amount: amount,
+            currency: 'usd',
+            plan: plan.name,
+            billingCycle: isYearly ? 'yearly' : 'monthly',
+            status: 'succeeded',
+            receiptUrl: subscription.latest_invoice?.hosted_invoice_url,
+            paymentMethod: paymentMethodData,
+            metadata: {
+              description: `Subscription to ${plan.name} plan (${isYearly ? 'yearly' : 'monthly'})`,
+              createdManually: true
+            }
+          });
+          
+          await paymentRecord.save();
+          console.log(`Payment record created manually for user ${req.user._id}`);
+        }
+      } catch (paymentRecordError) {
+        console.error('Error creating payment record in createPaymentIntent:', paymentRecordError);
+        // Continue execution even if payment record creation fails
+      }
       
       res.json({
         success: true,
@@ -514,6 +577,58 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     user.subscription.canceledAt = undefined; // Clear cancellation if resubscribed
     
     await user.save();
+    
+    // Create a payment record in the database
+    try {
+      // Get the payment details from Stripe
+      const paymentIntent = await stripe.paymentIntents.retrieve(invoice.payment_intent);
+      const charge = paymentIntent.latest_charge ? 
+        await stripe.charges.retrieve(paymentIntent.latest_charge) : null;
+      
+      // Get payment method details
+      let paymentMethod = null;
+      if (paymentIntent.payment_method) {
+        paymentMethod = await stripe.paymentMethods.retrieve(paymentIntent.payment_method);
+      }
+      
+      // Format payment method for storage
+      const paymentMethodData = paymentMethod ? {
+        id: paymentMethod.id,
+        brand: paymentMethod.card?.brand || 'unknown',
+        last4: paymentMethod.card?.last4 || '****',
+        expMonth: paymentMethod.card?.exp_month?.toString() || '',
+        expYear: paymentMethod.card?.exp_year?.toString() || ''
+      } : null;
+      
+      // Create a new payment record
+      const paymentRecord = new Payment({
+        userId: userId,
+        paymentId: invoice.payment_intent,
+        invoiceId: invoice.id,
+        subscriptionId: subscription.id,
+        customerId: customer.id,
+        date: new Date(invoice.created * 1000),
+        amount: invoice.amount_paid / 100, // Convert from cents to dollars
+        currency: invoice.currency,
+        plan: plan.name,
+        billingCycle: isYearly ? 'yearly' : 'monthly',
+        status: 'succeeded',
+        receiptUrl: invoice.hosted_invoice_url || charge?.receipt_url,
+        receiptNumber: invoice.number,
+        paymentMethod: paymentMethodData,
+        metadata: {
+          description: invoice.description,
+          customerEmail: invoice.customer_email || customer.email,
+          customerName: customer.name
+        }
+      });
+      
+      await paymentRecord.save();
+      console.log(`Payment record created for user ${userId}, invoice ${invoice.id}`);
+    } catch (paymentError) {
+      console.error('Error creating payment record:', paymentError);
+      // Continue execution even if payment record creation fails
+    }
     
     console.log(`Updated subscription for user ${userId}: Plan ${plan.name}, Credits: ${plan.videosCredits}`);
   } catch (error) {

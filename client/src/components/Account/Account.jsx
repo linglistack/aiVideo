@@ -19,7 +19,15 @@ import {
   IoWarningOutline,
   IoCloudUploadOutline,
   IoReloadOutline,
-  IoDownloadOutline
+  IoDownloadOutline,
+  IoCalendarOutline,
+  IoTimeOutline,
+  IoCashOutline,
+  IoStarOutline,
+  IoVideocamOutline,
+  IoSpeedometerOutline,
+  IoHeadsetOutline,
+  IoCheckmarkOutline
 } from 'react-icons/io5';
 import * as subscriptionService from '../../services/subscriptionService';
 import * as authService from '../../services/authService';
@@ -67,6 +75,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     nameOnCard: ''
   });
   const [paymentMethods, setPaymentMethods] = useState([]);
+  const [loadingPaymentHistory, setLoadingPaymentHistory] = useState(false);
   
   // Avatar state - placeholder for future implementation
   const [avatar, setAvatar] = useState(user?.avatar || null);
@@ -183,6 +192,56 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     fetchData();
   }, []); // Empty dependency array so it only runs once on mount
   
+  // Fetch payment history from server
+  const fetchPaymentHistory = async () => {
+    try {
+      setLoadingPaymentHistory(true);
+      // Get token directly from localStorage for reliability
+      let token = null;
+      const userString = localStorage.getItem('user');
+      if (userString) {
+        const userData = JSON.parse(userString);
+        if (userData && userData.token) {
+          token = userData.token;
+        }
+      }
+      
+      // Use the component user state token as fallback
+      if (!token && user?.token) {
+        token = user.token;
+      }
+      
+      if (!token) {
+        console.warn('No token available to fetch payment history');
+        return;
+      }
+      
+      console.log('Fetching payment history...');
+      const response = await getPaymentHistory(token);
+      
+      if (response.success && response.payments) {
+        console.log('Payment history fetched:', response.payments);
+        setPaymentHistory(response.payments);
+      } else {
+        console.warn('No payment history returned from API');
+        // If API call succeeds but returns no payments, set empty array
+        setPaymentHistory([]);
+      }
+    } catch (error) {
+      console.error('Failed to fetch payment history:', error);
+      // On error, don't update state so we keep any existing payment history
+    } finally {
+      setLoadingPaymentHistory(false);
+    }
+  };
+  
+  // Use effect to fetch payment history when payment tab is active
+  useEffect(() => {
+    if (activeTab === 'payment') {
+      fetchPaymentHistory();
+    }
+  }, [activeTab]);
+  
   // Handle tab change
   const handleTabChange = (tab) => {
     setActiveTab(tab);
@@ -254,8 +313,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         }
       }
     } catch (error) {
-      console.error('Error fetching payment methods:', error);
-      // Fallback to using payment methods from user object if API fails
+      console.error('Failed to fetch payment methods:', error);
+      // Fallback to using payment methods from user object
       if (user?.paymentMethods && user.paymentMethods.length > 0) {
         setPaymentMethods(user.paymentMethods);
       }
@@ -748,7 +807,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         monthlyPriceId: 'price_starter_monthly',
         yearlyPriceId: 'price_starter_yearly',
         videos: 10,
-        storage: '5GB',
         features: ['Basic editing tools', 'Standard quality', 'Email support']
       },
       {
@@ -760,7 +818,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         monthlyPriceId: 'price_growth_monthly',
         yearlyPriceId: 'price_growth_yearly',
         videos: 50,
-        storage: '25GB',
         features: ['Advanced editing tools', 'HD quality', 'Priority support']
       },
       {
@@ -772,7 +829,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         monthlyPriceId: 'price_scale_monthly',
         yearlyPriceId: 'price_scale_yearly',
         videos: 150,
-        storage: '100GB',
         features: ['Premium effects', '4K quality', '24/7 dedicated support']
       }
     ];
@@ -1079,30 +1135,50 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     return (
       <div className="space-y-8">
         {/* Current Plan & Summary */}
-        <div className="bg-tiktok-dark rounded-xl p-8">
+        <div className="bg-gradient-to-br from-gray-900 to-tiktok-dark rounded-xl p-8 border border-gray-800">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center">
-              <IoShieldOutline className="text-tiktok-pink text-3xl mr-4" />
+              <div className="bg-gradient-to-br from-tiktok-blue to-tiktok-pink rounded-full p-2 mr-4">
+                <IoShieldOutline className="text-white text-3xl" />
+              </div>
+              <div>
               <h2 className="text-xl font-bold">{currentPlan}</h2>
+                <p className="text-gray-400 text-sm">Your current subscription</p>
             </div>
-            <span className={`${statusInfo.statusClass} px-3 py-1 rounded-full text-sm font-medium`}>
+            </div>
+            <span className={`${statusInfo.statusClass} px-3 py-1 rounded-full text-sm font-medium flex items-center`}>
+              {statusInfo.status === 'active' && <span className="h-2 w-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>}
+              {statusInfo.status === 'canceled' && <span className="h-2 w-2 bg-red-500 rounded-full mr-2"></span>}
+              {statusInfo.status === 'inactive' && <span className="h-2 w-2 bg-yellow-500 rounded-full mr-2"></span>}
               {statusInfo.statusText}
             </span>
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <div className="bg-gray-800 p-4 rounded-lg">
-              <p className="text-gray-400 text-sm mb-1">Billing Cycle</p>
+            <div className="bg-gradient-to-br from-blue-900/30 to-blue-700/10 border border-blue-900/30 p-4 rounded-lg flex flex-col relative overflow-hidden group transition-all duration-300 hover:shadow-lg hover:shadow-blue-900/20 hover:-translate-y-1">
+              <div className="absolute top-0 right-0 h-16 w-16 bg-gradient-to-br from-blue-500 to-tiktok-blue rounded-bl-full opacity-20 transition-opacity group-hover:opacity-40"></div>
+              <p className="text-gray-400 text-sm mb-1 flex items-center">
+                <IoCalendarOutline className="text-blue-400 mr-2" />
+                Billing Cycle
+              </p>
               <p className="text-lg font-medium text-white capitalize">{subscription.billingCycle || 'Monthly'}</p>
             </div>
             
-            <div className="bg-gray-800 p-4 rounded-lg">
-              <p className="text-gray-400 text-sm mb-1">Start Date</p>
+            <div className="bg-gradient-to-br from-purple-900/30 to-purple-700/10 border border-purple-900/30 p-4 rounded-lg flex flex-col relative overflow-hidden group transition-all duration-300 hover:shadow-lg hover:shadow-purple-900/20 hover:-translate-y-1">
+              <div className="absolute top-0 right-0 h-16 w-16 bg-gradient-to-br from-purple-500 to-tiktok-pink rounded-bl-full opacity-20 transition-opacity group-hover:opacity-40"></div>
+              <p className="text-gray-400 text-sm mb-1 flex items-center">
+                <IoCalendarOutline className="text-purple-400 mr-2" />
+                Start Date
+              </p>
               <p className="text-lg font-medium text-white">{formatDate(startDate)}</p>
             </div>
             
-            <div className="bg-gray-800 p-4 rounded-lg">
-              <p className="text-gray-400 text-sm mb-1">{statusInfo.nextDateLabel}</p>
+            <div className="bg-gradient-to-br from-tiktok-pink/30 to-pink-700/10 border border-pink-900/30 p-4 rounded-lg flex flex-col relative overflow-hidden group transition-all duration-300 hover:shadow-lg hover:shadow-pink-900/20 hover:-translate-y-1">
+              <div className="absolute top-0 right-0 h-16 w-16 bg-gradient-to-br from-pink-500 to-tiktok-pink rounded-bl-full opacity-20 transition-opacity group-hover:opacity-40"></div>
+              <p className="text-gray-400 text-sm mb-1 flex items-center">
+                <IoTimeOutline className="text-pink-400 mr-2" />
+                {statusInfo.nextDateLabel}
+              </p>
               <p className="text-lg font-medium text-white">
                 {formatDate(nextBillingDate)}
                 {statusInfo.status === 'canceled' && 
@@ -1113,8 +1189,12 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               </p>
             </div>
             
-            <div className="bg-gray-800 p-4 rounded-lg">
-              <p className="text-gray-400 text-sm mb-1">Price</p>
+            <div className="bg-gradient-to-br from-green-900/30 to-green-700/10 border border-green-900/30 p-4 rounded-lg flex flex-col relative overflow-hidden group transition-all duration-300 hover:shadow-lg hover:shadow-green-900/20 hover:-translate-y-1">
+              <div className="absolute top-0 right-0 h-16 w-16 bg-gradient-to-br from-green-500 to-teal-500 rounded-bl-full opacity-20 transition-opacity group-hover:opacity-40"></div>
+              <p className="text-gray-400 text-sm mb-1 flex items-center">
+                <IoCashOutline className="text-green-400 mr-2" />
+                Price
+              </p>
               <p className="text-lg font-medium text-white">
                 ${subscription.billingCycle === 'yearly' 
                   ? (userPlanDetails.yearlyPrice / 12).toFixed(2) 
@@ -1128,22 +1208,55 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             </div>
           </div>
           
-          <div className="bg-gray-800 p-5 rounded-xl mb-6">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="font-medium">Videos Used</h3>
-              <p className="text-gray-400 text-sm">{videosUsed} / {videosLimit}</p>
+          {/* Features for current plan */}
+          <div className="bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
+            <h3 className="text-lg font-medium mb-4 flex items-center">
+              <IoStarOutline className="text-tiktok-pink mr-2" />
+              Your Plan Features
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="flex items-center bg-black/30 p-3 rounded-lg group transition-colors hover:bg-black/40">
+                <div className="bg-gradient-to-br from-tiktok-blue to-blue-600 p-2 rounded-full mr-3">
+                  <IoVideocamOutline className="text-white text-xl" />
             </div>
-            <div className="h-2 bg-gray-900 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-tiktok-blue to-tiktok-pink"
-                style={{ width: `${videoUsagePercent}%` }}
-              ></div>
+                <div>
+                  <p className="font-medium text-white">{videosLimit} videos</p>
+                  <p className="text-gray-400 text-sm">per month</p>
             </div>
-            <p className="text-xs text-gray-500 mt-2">
-              {isFreePlan 
-                ? "Upgrade to get more videos per month"
-                : `${videosLimit - videosUsed} videos remaining this billing cycle`}
-            </p>
+              </div>
+              
+              {userPlanDetails && userPlanDetails.features && userPlanDetails.features.map((feature, idx) => (
+                <div key={idx} className="flex items-center bg-black/30 p-3 rounded-lg group transition-colors hover:bg-black/40">
+                  <div className={`bg-gradient-to-br ${
+                    idx % 3 === 0 ? 'from-green-500 to-teal-600' : 
+                    idx % 3 === 1 ? 'from-purple-500 to-indigo-600' : 
+                    'from-tiktok-pink to-red-600'
+                  } p-2 rounded-full mr-3`}>
+                    {idx % 3 === 0 ? (
+                      <IoCheckmarkOutline className="text-white text-xl" />
+                    ) : idx % 3 === 1 ? (
+                      <IoSpeedometerOutline className="text-white text-xl" />
+                    ) : (
+                      <IoHeadsetOutline className="text-white text-xl" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="font-medium text-white">{feature}</p>
+                  </div>
+                </div>
+              ))}
+              
+              {/* <div className="flex items-center bg-black/30 p-3 rounded-lg group transition-colors hover:bg-black/40">
+                <div className="bg-gradient-to-br from-amber-500 to-orange-600 p-2 rounded-full mr-3">
+                  <IoCloudUploadOutline className="text-white text-xl" />
+                </div>
+                <div>
+                  <p className="font-medium text-white">{userPlanDetails?.storage || '5GB'}</p>
+                  <p className="text-gray-400 text-sm">storage</p>
+                </div>
+              </div> */}
+            </div>
           </div>
           
           {/* Show different action buttons based on subscription status */}
@@ -1455,25 +1568,221 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   
   // Payment Tab Content
   const renderPaymentTab = () => {
+    // Helper function to format dates
+    const formatDate = (dateString) => {
+      if (!dateString) return 'N/A';
+      return new Date(dateString).toLocaleDateString();
+    };
+    
     return (
-      <div className="space-y-6">
-        <div className="section-container">
-          {/* Payment methods section with card icon header */}
-          <div className="mb-8">
-            {renderPaymentMethodsSection()}
+      <div className="space-y-8">
+        {/* Payment Methods Section */}
+        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-800 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center">
+              <div className="bg-gradient-to-br from-tiktok-blue to-tiktok-pink p-2 rounded-full mr-3">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-white h-6 w-6">
+                  <path fill="currentColor" d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-xl font-semibold">Payment Methods</h2>
+                <p className="text-gray-400 text-sm">Manage your payment options</p>
+              </div>
           </div>
           
-          {/* Billing history section with receipt icon header */}
-          <div className="mb-8">
-            <div className="flex items-center mb-6">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-tiktok-pink h-6 w-6 mr-3">
-                <path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.11.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM16 18H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
-              </svg>
-              <h2 className="text-xl font-semibold">Billing History</h2>
+            {/* Only show this button when there are already payment methods */}
+            {paymentMethods && paymentMethods.length > 0 && (
+              <button 
+                onClick={() => setShowAddCardModal(true)}
+                className="flex items-center text-sm bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white py-2 px-4 rounded-xl transition-all hover:opacity-90"
+              >
+                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                </svg>
+                Add New Card
+              </button>
+            )}
+          </div>
+          
+          {paymentMethods && paymentMethods.length > 0 ? (
+            <div className="space-y-3">
+              {paymentMethods.map((method, index) => (
+                <PaymentMethodCard
+                  key={index}
+                  paymentMethod={method}
+                  isDefault={user.paymentMethod && user.paymentMethod.id === method.id}
+                  onDelete={() => handleDeletePaymentMethod(method.id)}
+                  onMakeDefault={() => handleMakeDefaultPaymentMethod(method)}
+                />
+              ))}
             </div>
-            {renderBillingHistorySection()}
+          ) : (
+            <div className="bg-black/30 rounded-xl p-8 text-center">
+              <div className="mb-4 flex justify-center">
+                <div className="relative">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                  </svg>
+                  <div className="absolute -top-2 -right-2 bg-tiktok-pink rounded-full h-8 w-8 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                    </svg>
+                  </div>
+                </div>
+              </div>
+              <h3 className="text-xl font-semibold mb-2">No Payment Methods</h3>
+              <p className="text-gray-400 mb-6">You haven't added any payment methods yet.</p>
+              <button 
+                onClick={() => setShowAddCardModal(true)}
+                className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white py-3 px-6 rounded-xl hover:opacity-90 transition-opacity inline-flex items-center"
+              >
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                </svg>
+                Add Payment Method
+              </button>
+            </div>
+          )}
+          
+          {/* Payment types information */}
+          <div className="mt-6 pt-6 border-t border-gray-800">
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <div className="flex items-center bg-gray-900 px-4 py-2 rounded-lg">
+                <FaCcVisa className="text-blue-500 text-2xl mr-2" />
+                <FaCcMastercard className="text-red-500 text-2xl mr-2" />
+                <FaCcAmex className="text-blue-600 text-2xl mr-2" />
+                <FaCcDiscover className="text-orange-500 text-2xl" />
+              </div>
+              <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
+                <FaPaypal className="text-blue-500 text-2xl" />
+              </div>
+              <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center">
+                <svg viewBox="0 0 24 24" className="h-6 mr-2" fill="white">
+                  <path d="M17.05 12.536c-.021-2.307 1.894-3.41 1.98-3.467-1.077-1.577-2.757-1.792-3.353-1.818-1.428-.145-2.79.84-3.511.84-.723 0-1.84-.82-3.026-.797-1.558.022-2.994.906-3.797 2.3-1.616 2.802-.413 6.934 1.161 9.204.77 1.112 1.687 2.358 2.888 2.313 1.16-.046 1.597-.75 2.996-.75 1.401 0 1.795.75 3.025.726 1.249-.02 2.04-1.137 2.803-2.253.884-1.29 1.248-2.543 1.269-2.607-.029-.013-2.435-.935-2.459-3.703z"/>
+                  <path d="M15.315 6.403c.64-.776 1.071-1.854.953-2.926-.92.037-2.04.613-2.7 1.384-.593.688-1.113 1.786-.973 2.84 1.026.08 2.08-.522 2.72-1.298z"/>
+                </svg>
+                <span className="text-white">Apple Pay</span>
+              </div>
+            </div>
+            <div className="text-center mt-3">
+              <p className="text-gray-500 text-xs">Secure payments powered by Stripe</p>
+            </div>
           </div>
         </div>
+          
+        {/* Billing History Section */}
+        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-800 rounded-xl p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center">
+              <div className="bg-gradient-to-br from-green-500 to-teal-500 p-2 rounded-full mr-3">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" className="text-white h-6 w-6">
+                <path fill="currentColor" d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.11.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zM16 18H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+              </svg>
+              </div>
+              <div>
+              <h2 className="text-xl font-semibold">Billing History</h2>
+                <p className="text-gray-400 text-sm">View and download your receipts</p>
+            </div>
+            </div>
+            
+            {/* Export all receipts button - Only show if there's payment history */}
+            {/* {paymentHistory.length > 0 && (
+              <button 
+                onClick={() => {
+                  // You could implement a "download all receipts" feature here
+                  setSuccess('All receipts exported successfully!');
+                }}
+                className="flex items-center text-sm border border-teal-500 text-teal-500 bg-teal-500/10 py-2 px-4 rounded-xl transition-all hover:bg-teal-500/20"
+              >
+                <IoDownloadOutline className="mr-1" />
+                Export All
+              </button>
+            )} */}
+          </div>
+          
+          {loadingPaymentHistory ? (
+            <div className="bg-black/30 rounded-xl p-8 text-center">
+              <div className="mb-4 flex justify-center">
+                <div className="w-10 h-10 border-t-2 border-b-2 border-tiktok-pink rounded-full animate-spin"></div>
+              </div>
+              <p className="text-gray-400">Loading payment history...</p>
+            </div>
+          ) : paymentHistory.length > 0 ? (
+            <div className="bg-black/30 rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-black/50 text-left">
+                    <tr>
+                      <th className="py-3 px-4 text-gray-400 font-medium text-sm">Date</th>
+                      <th className="py-3 px-4 text-gray-400 font-medium text-sm">Amount</th>
+                      <th className="py-3 px-4 text-gray-400 font-medium text-sm">Plan</th>
+                      <th className="py-3 px-4 text-gray-400 font-medium text-sm">Status</th>
+                      <th className="py-3 px-4 text-gray-400 font-medium text-sm text-right">Receipt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paymentHistory.map((payment, idx) => (
+                      <tr key={payment.id || idx} className="border-t border-gray-800 hover:bg-gray-900/30 transition-colors">
+                        <td className="py-4 px-4">{formatDate(payment.date)}</td>
+                        <td className="py-4 px-4 font-medium">${payment.amount}</td>
+                        <td className="py-4 px-4">
+                          <span className="inline-flex items-center">
+                            <span className={`h-2 w-2 rounded-full mr-2 ${
+                              payment.plan?.toLowerCase()?.includes('starter') ? 'bg-blue-500' :
+                              payment.plan?.toLowerCase()?.includes('growth') ? 'bg-purple-500' :
+                              payment.plan?.toLowerCase()?.includes('scale') ? 'bg-tiktok-pink' : 'bg-gray-500'
+                            }`}></span>
+                            {payment.plan || 'Unknown Plan'}
+                          </span>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            payment.status === 'succeeded' 
+                              ? 'bg-green-500/20 text-green-500' 
+                              : 'bg-yellow-500/20 text-yellow-500'
+                          }`}>
+                            {payment.status === 'succeeded' ? 'Paid' : 'Pending'}
+                          </span>
+                        </td>
+                        <td className="py-4 px-4 text-right">
+                          <button 
+                            onClick={() => generateReceipt(payment)}
+                            className="inline-flex items-center justify-center bg-gradient-to-r from-teal-500 to-green-500 text-white py-1.5 px-4 rounded-full hover:opacity-90 transition-all group"
+                          >
+                            <IoDownloadOutline className="mr-1.5 group-hover:animate-bounce" />
+                            Receipt
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-black/30 rounded-xl p-8 text-center">
+              <div className="mb-4 flex justify-center">
+                <div className="bg-gray-900/70 p-4 rounded-full">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+              </div>
+              <h3 className="text-xl font-semibold mb-2">No Billing History</h3>
+              <p className="text-gray-400">Your payment history will appear here once you've made a payment</p>
+              <button 
+                onClick={fetchPaymentHistory} 
+                className="mt-4 flex items-center justify-center mx-auto bg-gray-800 text-gray-300 py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <IoReloadOutline className="mr-2" />
+                Refresh
+              </button>
+            </div>
+          )}
+        </div>
+        
+
         
         {/* Modals */}
         {showAddCardModal && (
@@ -1502,14 +1811,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           selectedPlanId={selectedPlanId}
           selectedBillingCycle={selectedBillingCycle}
           onChangeBillingCycle={setSelectedBillingCycle}
-        />
-        
-        <CancelSubscriptionModal
-          show={showCancelConfirmation}
-          onClose={() => setShowCancelConfirmation(false)}
-          onConfirm={confirmCancelSubscription}
-          onReasonChange={setCancelReason}
-          cancelReason={cancelReason}
         />
       </div>
     );
@@ -1717,7 +2018,14 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     
     return (
       <div>
-        {paymentHistory.length > 0 ? (
+        {loadingPaymentHistory ? (
+          <div className="bg-gray-800 rounded-xl p-6 text-center">
+            <div className="mb-4 flex justify-center">
+              <div className="w-8 h-8 border-t-2 border-b-2 border-tiktok-pink rounded-full animate-spin"></div>
+            </div>
+            <p className="text-gray-300">Loading payment history...</p>
+          </div>
+        ) : paymentHistory.length > 0 ? (
           <div className="bg-gray-800 rounded-xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -1735,7 +2043,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                     <tr key={payment.id || idx} className="border-t border-gray-700">
                       <td className="py-3 px-4">{formatDate(payment.date)}</td>
                       <td className="py-3 px-4">${payment.amount}</td>
-                      <td className="py-3 px-4">{payment.plan}</td>
+                      <td className="py-3 px-4">{payment.plan || 'Unknown Plan'}</td>
                       <td className="py-3 px-4">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           payment.status === 'succeeded' 
@@ -1770,6 +2078,13 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               </svg>
             </div>
             <p className="text-gray-300">No payment history available</p>
+            <button 
+              onClick={fetchPaymentHistory} 
+              className="mt-4 flex items-center justify-center mx-auto bg-gray-800 text-gray-300 py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              <IoReloadOutline className="mr-2" />
+              Refresh
+            </button>
           </div>
         )}
       </div>
@@ -2104,9 +2419,50 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   
   // Generate receipt function
   const generateReceipt = (payment) => {
-    // Placeholder function for generating a receipt
-    console.log('Generating receipt for payment:', payment);
+    // First, try to use the receipt URL if available
+    if (payment.receiptUrl) {
+      // Open receipt URL in a new tab
+      window.open(payment.receiptUrl, '_blank');
+      return;
+    }
+    
+    // If no receipt URL is available, create a basic receipt download
+    try {
+      // Format date
+      const paymentDate = payment.date ? new Date(payment.date).toLocaleDateString() : 'N/A';
+      
+      // Create receipt content
+      const receiptContent = `
+        Receipt
+        -------
+        Payment ID: ${payment.id || 'Unknown'}
+        Date: ${paymentDate}
+        Amount: $${payment.amount?.toFixed(2) || '0.00'}
+        Plan: ${payment.plan || 'Unknown Plan'}
+        Status: ${payment.status === 'succeeded' ? 'Paid' : 'Pending'}
+        ${payment.receiptNumber ? `Receipt Number: ${payment.receiptNumber}` : ''}
+      `.trim().replace(/^ +/gm, ''); // Remove leading spaces from each line
+      
+      // Create a blob with the receipt content
+      const blob = new Blob([receiptContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      
+      // Create a temporary link element to trigger the download
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `receipt-${payment.id || Date.now()}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      
+      // Clean up
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
     setSuccess('Receipt downloaded successfully');
+    } catch (error) {
+      console.error('Error generating receipt:', error);
+      setError('Failed to generate receipt');
+    }
   };
   
   // Payment Method Card Component

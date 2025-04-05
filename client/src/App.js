@@ -433,7 +433,7 @@ function App() {
     
     // Then navigate to home page directly from here
     // React Router will handle this more cleanly than a full page reload
-    window.location.href = '/';
+    window.location.href = '/login';
   };
 
   if (loading) {
