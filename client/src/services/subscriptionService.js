@@ -1,7 +1,49 @@
-import axios from 'axios';
+import API from './api';
 import { getCurrentUser } from './authService';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api/subscriptions';
+// Get all subscription plans
+export const getPlans = async () => {
+  try {
+    const response = await API.get('/subscriptions/plans');
+    return response.data;
+  } catch (error) {
+    console.error('Error getting plans:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
+  }
+};
+
+// Subscribe to a plan
+export const subscribeToPlan = async (planData) => {
+  try {
+    const response = await API.post('/subscriptions/subscribe', planData);
+    return response.data;
+  } catch (error) {
+    console.error('Error subscribing to plan:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
+  }
+};
+
+// Cancel subscription
+export const cancelSubscription = async () => {
+  try {
+    const response = await API.post('/subscriptions/cancel');
+    return response.data;
+  } catch (error) {
+    console.error('Error canceling subscription:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
+  }
+};
+
+// Get subscription status
+export const getSubscriptionStatus = async () => {
+  try {
+    const response = await API.get('/subscriptions/status');
+    return response.data;
+  } catch (error) {
+    console.error('Error getting subscription status:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
+  }
+};
 
 // Get auth header
 const getAuthHeader = () => {
@@ -33,55 +75,6 @@ const getAuthHeader = () => {
       Authorization: `Bearer ${user.token}`,
     },
   };
-};
-
-// Get all subscription plans
-const getPlans = async () => {
-  try {
-    const response = await axios.get(`${API_URL}/plans`);
-    return response.data;
-  } catch (error) {
-    console.error('Error getting plans:', error.response?.data || error.message);
-    throw error.response?.data || { success: false, error: error.message };
-  }
-};
-
-// Get user's subscription status
-const getSubscriptionStatus = async () => {
-  try {
-    const authHeader = getAuthHeader();
-    console.log('Requesting subscription status with headers:', authHeader);
-    
-    const response = await axios.get(`${API_URL}/status`, authHeader);
-    return response.data;
-  } catch (error) {
-    console.error('Error getting subscription status:', error.response?.data || error.message);
-    
-    // If we get 401 unauthorized, return a default starter plan
-    if (error.response?.status === 401) {
-      console.log('Providing default free plan due to auth error');
-      return {
-        success: true,
-        subscription: {
-          plan: 'free',
-          isActive: false,
-          videosUsed: 0,
-          videosLimit: 5,
-          startDate: new Date(),
-          endDate: new Date(new Date().setMonth(new Date().getMonth() + 1)),
-          isCanceled: false,
-          cancelAtPeriodEnd: false,
-          planDetails: {
-            name: 'Free',
-            monthlyPrice: 0,
-            yearlyPrice: 0
-          }
-        }
-      };
-    }
-    
-    throw error.response?.data || { success: false, error: error.message };
-  }
 };
 
 // Create checkout session
@@ -117,7 +110,7 @@ const createCheckoutSession = async (data) => {
       billingCycle: data.billingCycle
     });
     
-    const response = await axios.post(`${API_URL}/create-checkout-session`, data, auth);
+    const response = await API.post('/subscriptions/create-checkout-session', data, auth);
     console.log('createCheckoutSession: Response received:', response.data);
     
     // Ensure we return the URL in the response for redirection
@@ -177,8 +170,8 @@ const createPaymentIntent = async (data) => {
     });
     
     // Make the API request with the auth header
-    const response = await axios.post(
-      `${API_URL}/create-payment-intent`, 
+    const response = await API.post(
+      '/subscriptions/create-payment-intent', 
       data, 
       authHeader
     );
@@ -201,75 +194,6 @@ const createPaymentIntent = async (data) => {
     return { 
       success: false, 
       error: error.response?.data?.error || error.message || 'Failed to process payment'
-    };
-  }
-};
-
-// Cancel subscription
-const cancelSubscription = async (data = {}) => {
-  try {
-    const user = getCurrentUser();
-    
-    if (!user || !user.token) {
-      console.error('cancelSubscription: No valid user token found');
-      return {
-        success: false,
-        error: 'Authentication required. Please log in again.'
-      };
-    }
-    
-    console.log('Sending cancel subscription request with auth token');
-    const response = await axios.delete(`${API_URL}/cancel`, {
-      ...getAuthHeader(),
-      data: data // Send data in the request body for DELETE
-    });
-    
-    // If successful, update the local user data to reflect cancellation
-    if (response.data.success) {
-      try {
-        const currentUser = JSON.parse(localStorage.getItem('user'));
-        if (currentUser && currentUser.subscription) {
-          // Apply cancellation state but keep access until period end
-          // The key point is to keep isActive true but mark as canceled
-          const updatedSubscription = {
-            ...currentUser.subscription,
-            isActive: true, // Keep active until end of period
-            cancelAtPeriodEnd: true,
-            isCanceled: true,
-            canceledAt: new Date().toISOString(),
-          };
-          
-          // If the server returned subscription data, merge it
-          if (response.data.subscription) {
-            Object.assign(updatedSubscription, response.data.subscription);
-          }
-          
-          // Apply updates to user object
-          currentUser.subscription = updatedSubscription;
-          
-          localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Updated local user data with subscription cancellation:', updatedSubscription);
-        }
-      } catch (localStorageError) {
-        console.error('Error updating local storage after cancellation:', localStorageError);
-      }
-    }
-    
-    return response.data;
-  } catch (error) {
-    console.error('Error canceling subscription:', error);
-    
-    // Handle 401 unauthorized errors
-    if (error.response?.status === 401) {
-      return {
-        success: false,
-        error: 'Your session has expired. Please log in again.'
-      };
-    }
-    
-    return {
-      success: false,
-      error: error.response?.data?.error || error.message || 'Failed to cancel subscription'
     };
   }
 };
@@ -317,8 +241,8 @@ const refreshSubscriptionData = async () => {
 // Verify session (after checkout)
 const verifySession = async (sessionId) => {
   try {
-    const response = await axios.get(
-      `${API_URL}/verify-session?session_id=${sessionId}`,
+    const response = await API.get(
+      `/subscriptions/verify-session?session_id=${sessionId}`,
       getAuthHeader()
     );
     return response.data;
@@ -342,8 +266,8 @@ const createBillingPortalSession = async (returnUrl) => {
     }
     
     console.log('Creating billing portal session for user');
-    const response = await axios.post(
-      `${API_URL}/create-billing-portal`,
+    const response = await API.post(
+      '/subscriptions/create-billing-portal',
       { returnUrl },
       getAuthHeader()
     );
@@ -385,7 +309,7 @@ const getSubscriptionUsage = async () => {
     };
     
     console.log('Requesting subscription usage with token');
-    const response = await axios.get(`${API_URL}/usage`, authHeader);
+    const response = await API.get('/subscriptions/usage', authHeader);
     return response.data;
   } catch (error) {
     console.error('Error getting subscription usage:', error.response?.data || error.message);
@@ -450,9 +374,9 @@ const savePaymentMethod = async (paymentMethodData) => {
     });
     
     // Make API request to save payment method - fix API URL prefix
-    const baseApiUrl = API_URL.replace('/api/subscriptions', '');
+    const baseApiUrl = API.baseUrl.replace('/api/subscriptions', '');
     
-    const response = await axios.post(
+    const response = await API.post(
       `${baseApiUrl}/api/payments/methods`, 
       paymentMethodData,
       authHeader
@@ -525,9 +449,9 @@ const getPaymentMethods = async () => {
     // The API_URL is defined at the top of the file as process.env.REACT_APP_API_URL || 'http://localhost:5000/api/subscriptions'
     // But we need the payments endpoint, not subscriptions endpoint
     // Extract the base URL from API_URL by removing the 'subscriptions' part
-    const baseApiUrl = API_URL.replace('/api/subscriptions', '');
+    const baseApiUrl = API.baseUrl.replace('/api/subscriptions', '');
     
-    const response = await axios.get(
+    const response = await API.get(
       `${baseApiUrl}/api/payments/methods`, 
       authHeader
     );
@@ -595,8 +519,8 @@ const syncPaymentMethods = async () => {
     console.log('Synchronizing payment methods with Stripe...');
     
     // Make API request to sync payment methods
-    const baseApiUrl = API_URL.replace('/api/subscriptions', '');
-    const response = await axios.post(
+    const baseApiUrl = API.baseUrl.replace('/api/subscriptions', '');
+    const response = await API.post(
       `${baseApiUrl}/api/payments/methods/sync`,
       {},
       authHeader

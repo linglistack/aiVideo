@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_URL = 'http://localhost:5000/api/videos';
+import API from './api';
 
 // Create a helper function to get auth header
 const authHeader = () => {
@@ -16,31 +14,37 @@ const authHeader = () => {
 // Generate a video
 export const generateVideo = async (videoData) => {
   try {
-    const response = await axios.post(
-      `${API_URL}/generate`, 
-      videoData, 
-      authHeader()
-    );
+    const response = await API.post('/videos/generate', videoData);
     return response.data;
   } catch (error) {
     throw error.response?.data || error;
   }
 };
 
-// Get all user videos
+// Get user's videos
 export const getUserVideos = async () => {
   try {
-    const response = await axios.get(API_URL, authHeader());
+    const response = await API.get('/videos');
     return response.data;
   } catch (error) {
     throw error.response?.data || error;
   }
 };
 
-// Get video by ID
+// Get a specific video by ID
 export const getVideoById = async (videoId) => {
   try {
-    const response = await axios.get(`${API_URL}/${videoId}`, authHeader());
+    const response = await API.get(`/videos/${videoId}`);
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
+};
+
+// Get video status
+export const getVideoStatus = async (videoId) => {
+  try {
+    const response = await API.get(`/videos/status/${videoId}`);
     return response.data;
   } catch (error) {
     throw error.response?.data || error;

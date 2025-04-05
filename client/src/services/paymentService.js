@@ -1,22 +1,9 @@
-import axios from 'axios';
-
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+import API from './api';
 
 // Add a payment method
-export const savePaymentMethod = async (paymentData, token) => {
+export const savePaymentMethod = async (paymentData) => {
   try {
-    const config = {
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-    };
-
-    const response = await axios.post(
-      `${API_URL}/payments/methods`,
-      paymentData,
-      config
-    );
+    const response = await API.post('/payments/methods', paymentData);
 
     // If successful, also save to localStorage to ensure persistence
     if (response.data.success && response.data.paymentMethod) {
@@ -43,95 +30,52 @@ export const savePaymentMethod = async (paymentData, token) => {
   }
 };
 
-// Get payment methods
-export async function getPaymentMethods(token) {
+// Get all payment methods
+export const getPaymentMethods = async () => {
   try {
-    const response = await axios.get(`${API_URL}/payments/methods`, {
-      headers: {
-        Authorization: `Bearer ${token}`
-      }
-    });
-
-    // Return the response data directly without localStorage operations
+    const response = await API.get('/payments/methods');
     return response.data;
   } catch (error) {
-    console.error('Error fetching payment methods:', error);
-    return {
-      success: false,
-      error: error.response?.data?.error || 'Unable to fetch payment methods'
-    };
+    console.error('Get payment methods error:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
   }
-}
+};
 
 // Delete payment method
-export const deletePaymentMethod = async (methodId, token) => {
+export const deletePaymentMethod = async (methodId) => {
   try {
     // Ensure methodId is a string
     const id = typeof methodId === 'object' ? methodId.id : methodId;
     
-    const config = {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    };
-
-    const response = await axios.delete(
-      `${API_URL}/payments/methods/${id}`,
-      config
-    );
-
+    const response = await API.delete(`/payments/methods/${id}`);
     return response.data;
   } catch (error) {
-    throw error.response && error.response.data.message
-      ? error.response.data.message
-      : error.message;
+    console.error('Delete payment method error:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
   }
 };
 
 // Get payment history
-export const getPaymentHistory = async (token) => {
+export const getPaymentHistory = async () => {
   try {
-    const config = {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    };
-
-    const response = await axios.get(
-      `${API_URL}/payments/history`,
-      config
-    );
-
+    const response = await API.get('/payments/history');
     return response.data;
   } catch (error) {
-    throw error.response && error.response.data.message
-      ? error.response.data.message
-      : error.message;
+    console.error('Get payment history error:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
   }
 };
 
 // Set default payment method
-export const setDefaultPaymentMethod = async (methodId, token) => {
+export const setDefaultPaymentMethod = async (methodId) => {
   try {
     // Ensure methodId is a string
     const id = typeof methodId === 'object' ? methodId.id : methodId;
     
-    const config = {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    };
-
-    const response = await axios.put(
-      `${API_URL}/payments/methods/default`,
-      { methodId: id },
-      config
-    );
-
+    const response = await API.put('/payments/methods/default', { methodId: id });
     return response.data;
   } catch (error) {
-    throw error.response && error.response.data.message
-      ? error.response.data.message
-      : error.message;
+    console.error('Set default payment method error:', error.response?.data || error.message);
+    throw error.response?.data || { success: false, error: error.message };
   }
 }; 
