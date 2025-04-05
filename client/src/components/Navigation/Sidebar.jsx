@@ -282,11 +282,13 @@ const Sidebar = ({ user, onLogout }) => {
                   className="h-10 w-10 rounded-full border-2 border-tiktok-pink"
                   onError={(e) => {
                     console.error('Error loading avatar image:', e);
+                    // Prevent infinite loop by removing the error handler
                     e.target.onerror = null;
-                    e.target.src = ''; // Clear src on error
-                    // Use initial fallback
-                    e.target.style.display = 'none';
-                    e.target.parentElement.querySelector('.avatar-fallback').style.display = 'flex';
+                    // Set user to have no avatar, which will render the fallback
+                    setRefreshedUser(prev => ({
+                      ...prev,
+                      avatar: null
+                    }));
                   }} 
                 />
               ) : (

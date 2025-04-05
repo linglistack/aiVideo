@@ -254,26 +254,7 @@ router.get('/history', protect, async (req, res) => {
       receiptNumber: payment.receiptNumber
     }));
     
-    // If there are no payment records in the database but we're in development,
-    // you can optionally return a mock record for testing
-    if (paymentHistory.length === 0 && process.env.NODE_ENV === 'development') {
-      const mockPayment = {
-        id: `pi_${Date.now()}`,
-        date: new Date().toISOString(),
-        amount: 19,
-        plan: 'Starter',
-        billingCycle: 'monthly',
-        status: 'succeeded',
-        receiptUrl: 'https://example.com/receipt'
-      };
-      
-      return res.json({
-        success: true,
-        payments: [mockPayment]
-      });
-    }
-    
-    // Return payment history
+    // Return payment history - no mock data
     res.json({
       success: true,
       payments: paymentHistory
