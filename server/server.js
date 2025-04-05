@@ -13,7 +13,12 @@ connectDB();
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? [process.env.CLIENT_URL || 'https://aivideo.vercel.app'] 
+    : 'http://localhost:3000',
+  credentials: true
+}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -61,10 +66,19 @@ app.use((req, res) => {
     });
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    
-    // Initialize the subscription scheduler
+// Initialize the subscription scheduler in production or local environment
+// but not in Vercel serverless functions
+if (process.env.NODE_ENV !== 'production' || process.env.VERCEL_ENV !== 'production') {
     initSubscriptionScheduler();
-}); 
+}
+
+// For local development
+if (process.env.NODE_ENV !== 'production') {
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+    });
+}
+
+// Export for Vercel serverless deployment
+module.exports = app; 

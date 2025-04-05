@@ -1,16 +1,19 @@
 {
     "version": 2,
-    "name": "aiVideo",
+    "name": "retail-store-finder-api",
     "builds": [
         {
-            "src": "/server.js",
+            "src": "server.js",
             "use": "@vercel/node"
         }
     ],
     "routes": [
         {
             "src": "/(.*)",
-            "dest": "/"
+            "dest": "/server.js"
         }
-    ]
+    ],
+    "env": {
+        "NODE_ENV": "production"
+    }
 }

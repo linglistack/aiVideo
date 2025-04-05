@@ -3,9 +3,14 @@ const router = express.Router();
 const { registerUser, loginUser, googleAuthUser, getUserProfile } = require('../controllers/userController');
 const { protect } = require('../middleware/authMiddleware');
 const upload = require('../middleware/uploadMiddleware');
-const cloudinary = require('../config/cloudinary');
-const path = require('path');
-const fs = require('fs');
+const cloudinary = require('cloudinary').v2;
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Register a new user
 router.post('/register', registerUser);
@@ -13,11 +18,8 @@ router.post('/register', registerUser);
 // Login user
 router.post('/login', loginUser);
 
-// Google authentication
+// Google auth
 router.post('/google', googleAuthUser);
-
-// Get user profile
-router.get('/profile', protect, getUserProfile);
 
 // Update user profile with Cloudinary avatar upload
 router.put('/profile', protect, upload.single('avatar'), async (req, res) => {
@@ -26,11 +28,6 @@ router.put('/profile', protect, upload.single('avatar'), async (req, res) => {
     const user = await require('../models/aiUser').findById(req.user._id);
     
     if (!user) {
-      // Delete uploaded file if user not found
-      if (req.file) {
-        fs.unlinkSync(req.file.path);
-      }
-      
       return res.status(404).json({
         success: false,
         error: 'User not found'
@@ -46,8 +43,8 @@ router.put('/profile', protect, upload.single('avatar'), async (req, res) => {
     // Handle avatar upload with Cloudinary
     if (req.file) {
       try {
-        // Upload to Cloudinary
-        const result = await cloudinary.uploader.upload(req.file.path, {
+        // Upload buffer to Cloudinary directly
+        const result = await cloudinary.uploader.upload_stream({
           folder: 'avatars',
           use_filename: false,
           unique_filename: true,
@@ -56,64 +53,81 @@ router.put('/profile', protect, upload.single('avatar'), async (req, res) => {
             { width: 250, height: 250, crop: 'fill', gravity: 'face' },
             { quality: 'auto' }
           ]
-        });
-        
-        console.log('Cloudinary upload result:', result);
-        
-        // If user already has an avatar on Cloudinary, delete the old one
-        if (user.avatar && user.avatar.includes('cloudinary') && user.avatar.includes('/avatars/')) {
-          try {
-            // Extract public_id from the URL
-            const publicId = user.avatar.split('/').slice(-2).join('/').split('.')[0];
-            if (publicId.startsWith('avatars/')) {
-              await cloudinary.uploader.destroy(publicId);
-              console.log('Old avatar deleted from Cloudinary:', publicId);
-            }
-          } catch (err) {
-            console.error('Error deleting old avatar from Cloudinary:', err);
-            // Continue even if deletion fails
+        }, async (error, result) => {
+          if (error) {
+            console.error('Cloudinary upload error:', error);
+            return res.status(500).json({
+              success: false,
+              error: 'Failed to upload image to cloud storage'
+            });
           }
-        }
+          
+          console.log('Cloudinary upload result:', result);
+          
+          // If user already has an avatar on Cloudinary, delete the old one
+          if (user.avatar && user.avatar.includes('cloudinary') && user.avatar.includes('/avatars/')) {
+            try {
+              // Extract public_id from the URL
+              const publicId = user.avatar.split('/').slice(-2).join('/').split('.')[0];
+              if (publicId.startsWith('avatars/')) {
+                await cloudinary.uploader.destroy(publicId);
+                console.log('Old avatar deleted from Cloudinary:', publicId);
+              }
+            } catch (err) {
+              console.error('Error deleting old avatar from Cloudinary:', err);
+              // Continue even if deletion fails
+            }
+          }
+          
+          // Update the user's avatar with the Cloudinary URL
+          user.avatar = result.secure_url;
+          
+          await user.save();
+          
+          res.json({
+            success: true,
+            user: {
+              _id: user._id,
+              name: user.name,
+              email: user.email,
+              phone: user.phone,
+              company: user.company,
+              role: user.role,
+              avatar: user.avatar,
+              subscription: user.subscription
+            }
+          });
+        }).end(req.file.buffer);
         
-        // Update the user's avatar with the Cloudinary URL
-        user.avatar = result.secure_url;
-        
-        // Delete the temp file
-        fs.unlinkSync(req.file.path);
+        // Return early as the response is handled in the upload_stream callback
+        return;
       } catch (cloudinaryError) {
         console.error('Cloudinary upload error:', cloudinaryError);
-        
-        // Delete the temp file
-        fs.unlinkSync(req.file.path);
         
         return res.status(500).json({
           success: false,
           error: 'Failed to upload image to cloud storage'
         });
       }
+    } else {
+      // If no file was uploaded, just save the user and return
+      await user.save();
+      
+      res.json({
+        success: true,
+        user: {
+          _id: user._id,
+          name: user.name,
+          email: user.email,
+          phone: user.phone,
+          company: user.company,
+          role: user.role,
+          avatar: user.avatar,
+          subscription: user.subscription
+        }
+      });
     }
-    
-    await user.save();
-    
-    res.json({
-      success: true,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        company: user.company,
-        role: user.role,
-        avatar: user.avatar,
-        subscription: user.subscription
-      }
-    });
   } catch (error) {
-    // Clean up uploaded file on error
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    
     console.error('Profile update error:', error);
     res.status(500).json({
       success: false,
@@ -121,6 +135,9 @@ router.put('/profile', protect, upload.single('avatar'), async (req, res) => {
     });
   }
 });
+
+// Get user profile
+router.get('/profile', protect, getUserProfile);
 
 // Change password
 router.put('/change-password', protect, async (req, res) => {
