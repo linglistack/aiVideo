@@ -18,11 +18,11 @@ const subscriptionSchema = new mongoose.Schema({
   endDate: {
     type: Date
   },
-  videosUsed: {
+  creditsUsed: {
     type: Number,
     default: 0
   },
-  videosLimit: {
+  creditsTotal: {
     type: Number,
     default: function() {
       // Set default limits based on plan
@@ -48,16 +48,16 @@ const subscriptionSchema = new mongoose.Schema({
   }
 });
 
-// Method to check if user has available videos
-subscriptionSchema.methods.hasAvailableVideos = function() {
-  return this.videosUsed < this.videosLimit;
+// Method to check if user has available credits
+subscriptionSchema.methods.hasAvailableCredits = function() {
+  return this.creditsUsed < this.creditsTotal;
 };
 
-// Method to increment videos used
-subscriptionSchema.methods.incrementVideosUsed = async function() {
-  this.videosUsed += 1;
+// Method to increment credits used
+subscriptionSchema.methods.incrementCreditsUsed = async function() {
+  this.creditsUsed += 1;
   await this.save();
-  return this.videosUsed;
+  return this.creditsUsed;
 };
 
 const Subscription = mongoose.model('Subscription', subscriptionSchema);

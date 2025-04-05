@@ -6,6 +6,7 @@ const cron = require('node-cron');
 // Define cron jobs at module level
 let resetSubscriptionsJob = null;
 let resetCreditCyclesJob = null;
+let checkExpiredSubscriptionsJob = null;
 
 /**
  * Job to check and reset subscriptions that have reached their end date
@@ -42,7 +43,7 @@ const resetSubscriptionsJobFn = async () => {
         
         // Reset video usage and update end date
         await User.findByIdAndUpdate(user._id, {
-          'subscription.videosUsed': 0,
+          'subscription.creditsUsed': 0,
           'subscription.endDate': newEndDate,
           'subscription.lastResetDate': now
         });
@@ -88,11 +89,23 @@ const initSubscriptionScheduler = () => {
     }
   });
   
+  // Job to check for expired subscriptions
+  checkExpiredSubscriptionsJob = cron.schedule('0 * * * *', async () => { // Run every hour
+    console.log('Running job: checkExpiredSubscriptionsJob');
+    await checkExpiredSubscriptions();
+  }, {
+    scheduled: false
+  });
+  
   // Start the cron jobs
   resetSubscriptionsJob.start();
   resetCreditCyclesJob.start();
+  checkExpiredSubscriptionsJob.start();
   
-  console.log('Subscription scheduler initialized');
+  console.log('Subscription scheduler initialized with jobs:');
+  console.log('- resetCreditCyclesJob: Runs daily at midnight');
+  console.log('- resetSubscriptionsJob: Runs daily at 1 AM');
+  console.log('- checkExpiredSubscriptionsJob: Runs every hour');
 };
 
 /**
@@ -150,11 +163,11 @@ const resetUserCreditCycle = async (userId) => {
     user.subscription.cycleStartDate = cycleStartDate;
     user.subscription.cycleEndDate = cycleEndDate;
     user.subscription.creditsUsed = 0;
-    user.subscription.creditsTotal = plan.videosCredits;
+    user.subscription.creditsTotal = plan.creditsTotal;
     
     await user.save();
     
-    console.log(`Reset credit cycle for user ${userId}, new credits: ${plan.videosCredits}`);
+    console.log(`Reset credit cycle for user ${userId}, new credits: ${plan.creditsTotal}`);
     
     return { 
       success: true, 
@@ -163,7 +176,7 @@ const resetUserCreditCycle = async (userId) => {
         start: cycleStartDate,
         end: cycleEndDate
       },
-      credits: plan.videosCredits
+      credits: plan.creditsTotal
     };
   } catch (error) {
     console.error(`Error resetting credit cycle for user ${userId}:`, error);
@@ -213,7 +226,7 @@ const calculateProration = async (userId, newPlanName) => {
     const proratedPrice = priceDifference * cycleRemainingPercentage;
     
     // Calculate additional credits
-    const creditDifference = newPlan.videosCredits - currentPlan.videosCredits;
+    const creditDifference = newPlan.creditsTotal - currentPlan.creditsTotal;
     const additionalCredits = Math.floor(creditDifference * cycleRemainingPercentage);
     
     return {
@@ -233,6 +246,56 @@ const calculateProration = async (userId, newPlanName) => {
   }
 };
 
+/**
+ * Check for expired subscriptions and downgrade them to free plan
+ * Note: This is now primarily for cleanup of any legacy subscriptions
+ */
+const checkExpiredSubscriptions = async () => {
+  try {
+    const now = new Date();
+    
+    // Find any subscriptions that might still be in the legacy cancelAtPeriodEnd state
+    const users = await User.find({
+      'subscription.cancelAtPeriodEnd': true,
+      'subscription.endDate': { $lt: now } // End date is in the past
+    });
+    
+    console.log(`Found ${users.length} legacy subscriptions to properly cancel`);
+    
+    for (const user of users) {
+      console.log(`⏱️ Legacy subscription found. Properly updating user ${user._id} to free plan`);
+      
+      // Get current subscription details to preserve
+      const currentCreditsTotal = user.subscription?.creditsTotal || 0;
+      const currentCreditsUsed = user.subscription?.creditsUsed || 0;
+      
+      // Update user to free plan but keep their remaining credits
+      user.subscription.plan = 'free';
+      user.subscription.stripeSubscriptionId = null;
+      user.subscription.isActive = false; // Mark as inactive when canceled
+      user.subscription.creditsTotal = currentCreditsTotal; // Keep their remaining credits
+      user.subscription.creditsUsed = currentCreditsUsed; // Keep their used credits
+      user.subscription.billingCycle = 'none';
+      user.subscription.cancelAtPeriodEnd = false;
+      
+      await user.save();
+      
+      console.log(`✅ User ${user._id} subscription properly updated`);
+    }
+    
+    return {
+      success: true,
+      updated: users.length
+    };
+  } catch (error) {
+    console.error('Error checking expired subscriptions:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+};
+
 module.exports = {
   initSubscriptionScheduler,
   resetSubscriptionsJobFn,
@@ -240,5 +303,7 @@ module.exports = {
   resetUserCreditCycle,
   calculateProration,
   resetCreditCyclesJob,
-  resetSubscriptionsJob
+  resetSubscriptionsJob,
+  checkExpiredSubscriptions,
+  checkExpiredSubscriptionsJob
 }; 

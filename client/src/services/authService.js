@@ -320,6 +320,80 @@ const updateProfile = async (formData) => {
   }
 };
 
+// Delete user account
+const deleteAccount = async () => {
+  try {
+    const user = getCurrentUser();
+    
+    if (!user || !user.token) {
+      return {
+        success: false,
+        error: 'Not authenticated'
+      };
+    }
+    
+    const response = await axios.delete(`${API_URL}/delete-account`, {
+      headers: {
+        Authorization: `Bearer ${user.token}`
+      }
+    });
+    
+    if (response.data.success) {
+      // Clear user data from localStorage
+      localStorage.removeItem('user');
+      console.log('User account deleted successfully');
+      
+      return {
+        success: true,
+        message: response.data.message || 'Account deleted successfully'
+      };
+    }
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error deleting account:', error);
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Failed to delete account'
+    };
+  }
+};
+
+// Change password
+const changePassword = async (passwordData) => {
+  try {
+    const user = getCurrentUser();
+    
+    if (!user || !user.token) {
+      return {
+        success: false,
+        error: 'Not authenticated'
+      };
+    }
+    
+    const response = await axios.put(
+      `${API_URL}/change-password`,
+      {
+        currentPassword: passwordData.currentPassword,
+        newPassword: passwordData.newPassword
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${user.token}`
+        }
+      }
+    );
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error changing password:', error);
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Failed to change password'
+    };
+  }
+};
+
 // Create the service object
 const authService = {
   register,
@@ -330,7 +404,9 @@ const authService = {
   getCurrentUser,
   decodeJWT,
   refreshToken,
-  updateProfile
+  updateProfile,
+  deleteAccount,
+  changePassword
 };
 
 // Export both named functions and default object
@@ -343,7 +419,9 @@ export {
   getCurrentUser,
   decodeJWT,
   refreshToken,
-  updateProfile
+  updateProfile,
+  deleteAccount,
+  changePassword
 };
 
 export default authService; 

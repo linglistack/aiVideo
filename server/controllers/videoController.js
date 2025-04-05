@@ -77,14 +77,13 @@ const generateVideo = async (req, res) => {
     // Check user's subscription and video usage
     const user = await User.findById(req.user._id);
     
-    if (!user.subscription || user.subscription.videosUsed >= user.subscription.videosLimit) {
+    if (!user.subscription || user.subscription.creditsUsed >= user.subscription.creditsTotal) {
       return res.status(403).json({
         success: false,
-        error: 'You have reached your video limit for this month',
-        details: {
-          current: user.subscription?.videosUsed || 0,
-          limit: user.subscription?.videosLimit || 0,
-          plan: user.subscription?.plan || 'none'
+        error: 'Credit limit reached',
+        usage: {
+          current: user.subscription?.creditsUsed || 0,
+          limit: user.subscription?.creditsTotal || 0,
         }
       });
     }
@@ -114,9 +113,9 @@ const generateVideo = async (req, res) => {
       status: 'completed'
     });
 
-    // Update user's video usage count
+    // Update user's credit usage
     await User.findByIdAndUpdate(req.user._id, {
-      $inc: { 'subscription.videosUsed': 1 }
+      $inc: { 'subscription.creditsUsed': 1 }
     });
 
     res.status(201).json({

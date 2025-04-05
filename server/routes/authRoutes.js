@@ -257,4 +257,90 @@ router.post('/logout', (req, res) => {
   });
 });
 
+// Delete user account
+router.delete('/delete-account', protect, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    console.log(`Processing account deletion for user: ${userId}`);
+    
+    // Get user model
+    const aiUser = require('../models/aiUser');
+    
+    // Find the user
+    const user = await aiUser.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // If user has an active subscription, cancel it first
+    if (user.subscription && user.subscription.isActive && user.subscription.stripeSubscriptionId) {
+      try {
+        const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+        // Cancel the subscription in Stripe
+        await stripe.subscriptions.cancel(user.subscription.stripeSubscriptionId);
+        console.log(`Canceled Stripe subscription for user ${userId}`);
+      } catch (stripeError) {
+        console.error('Error canceling Stripe subscription:', stripeError);
+        // Continue with deletion even if subscription cancellation fails
+      }
+    }
+    
+    // If user has a Cloudinary avatar, delete it
+    if (user.avatar && user.avatar.includes('cloudinary') && user.avatar.includes('/avatars/')) {
+      try {
+        const cloudinary = require('cloudinary').v2;
+        // Extract public_id from the URL
+        const publicId = user.avatar.split('/').slice(-2).join('/').split('.')[0];
+        if (publicId.startsWith('avatars/')) {
+          await cloudinary.uploader.destroy(publicId);
+          console.log('User avatar deleted from Cloudinary');
+        }
+      } catch (cloudinaryError) {
+        console.error('Error deleting avatar from Cloudinary:', cloudinaryError);
+        // Continue with user deletion even if avatar deletion fails
+      }
+    }
+    
+    // Delete any videos associated with this user
+    try {
+      const Video = require('../models/Video');
+      await Video.deleteMany({ user: userId });
+      console.log(`Deleted all videos for user ${userId}`);
+    } catch (videoError) {
+      console.error('Error deleting user videos:', videoError);
+      // Continue with user deletion even if video deletion fails
+    }
+    
+    // Delete any payment records
+    try {
+      const Payment = require('../models/Payment');
+      await Payment.deleteMany({ userId });
+      console.log(`Deleted all payment records for user ${userId}`);
+    } catch (paymentError) {
+      console.error('Error deleting payment records:', paymentError);
+      // Continue with user deletion even if payment record deletion fails
+    }
+    
+    // Finally, delete the user
+    await aiUser.findByIdAndDelete(userId);
+    console.log(`User ${userId} has been successfully deleted`);
+    
+    res.json({
+      success: true,
+      message: 'Your account has been permanently deleted'
+    });
+    
+  } catch (error) {
+    console.error('Error deleting user account:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error while deleting account'
+    });
+  }
+});
+
 module.exports = router; 

@@ -63,11 +63,11 @@ const userSchema = new mongoose.Schema({
     endDate: {
       type: Date
     },
-    videosUsed: {
+    creditsUsed: {
       type: Number,
       default: 0
     },
-    videosLimit: {
+    creditsTotal: {
       type: Number,
       default: 0
     }

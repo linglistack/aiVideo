@@ -9,17 +9,17 @@ const Payment = require('../models/Payment');
 
 // Plan configurations
 const PLANS = {
-  starter: {
+  Starter: {
     price: 19,
-    videosLimit: 10
+    creditsTotal: 10
   },
-  growth: {
+  Growth: {
     price: 49,
-    videosLimit: 50
+    creditsTotal: 50
   },
-  scale: {
+  Scale: {
     price: 95,
-    videosLimit: 150
+    creditsTotal: 150
   }
 };
 
@@ -29,7 +29,6 @@ const PLANS = {
 const createSubscription = async (req, res) => {
   try {
     const { plan } = req.body;
-    
     if (!PLANS[plan]) {
       return res.status(400).json({
         success: false,
@@ -56,8 +55,8 @@ const createSubscription = async (req, res) => {
       subscription.plan = plan;
       subscription.startDate = startDate;
       subscription.endDate = endDate;
-      subscription.videosLimit = PLANS[plan].videosLimit;
-      subscription.videosUsed = 0; // Reset used videos
+      subscription.creditsTotal = PLANS[plan].creditsTotal;
+      subscription.creditsUsed = 0; // Reset used credits
       
       await subscription.save();
     } else {
@@ -67,7 +66,7 @@ const createSubscription = async (req, res) => {
         plan,
         startDate,
         endDate,
-        videosLimit: PLANS[plan].videosLimit,
+        creditsTotal: PLANS[plan].creditsTotal,
         status: 'active'
       });
     }
@@ -78,8 +77,8 @@ const createSubscription = async (req, res) => {
         plan,
         startDate,
         endDate,
-        videosLimit: PLANS[plan].videosLimit,
-        videosUsed: 0
+        creditsTotal: PLANS[plan].creditsTotal,
+        creditsUsed: 0
       }
     });
     
@@ -168,38 +167,38 @@ const cancelSubscription = async (req, res) => {
       }
     }
     
-    // Mark subscription as canceled but keep it active until the end of the period
-    // This ensures user retains access until subscription actually ends
+    // Get current subscription details to preserve
+    const currentCreditsTotal = user.subscription.creditsTotal || 0;
+    const currentCreditsUsed = user.subscription.creditsUsed || 0;
     
-    // Save the current date for tracking when cancellation occurred
+    // Set subscription to free plan but preserve their credits
+    user.subscription.plan = 'free';
+    user.subscription.isActive = false;
     user.subscription.canceledAt = new Date();
-    
-    // Set cancel at period end flag to true - critical for the UI to show correct state
-    user.subscription.cancelAtPeriodEnd = true;
-    
-    // Keep isActive as true since user should maintain access until end of period
-    user.subscription.isActive = true;
+    user.subscription.cancelAtPeriodEnd = false;
+    user.subscription.isCanceled = true;
+    user.subscription.creditsTotal = currentCreditsTotal; // Keep their remaining credits
+    user.subscription.creditsUsed = currentCreditsUsed; // Keep their used credits
+    user.subscription.billingCycle = 'none';
     
     await user.save();
     
-    console.log(`Subscription for user ${user._id} has been marked for cancellation at period end`);
+    console.log(`Subscription for user ${user._id} has been canceled immediately`);
     
     // Return comprehensive response with full subscription details
     res.json({
       success: true,
-      message: 'Subscription canceled at period end',
+      message: 'Subscription canceled successfully',
       subscription: {
         ...user.subscription.toObject(),
         // Add explicit flags for client-side clarity
         isCanceled: true,
-        cancelAtPeriodEnd: true,
-        isActive: true, // User maintains access until end of billing period
+        cancelAtPeriodEnd: false,
+        isActive: false, 
         // Include remaining information for UI updates
         creditsRemaining: Math.max(0, (user.subscription.creditsTotal || 0) - (user.subscription.creditsUsed || 0)),
-        validUntil: user.subscription.endDate
       },
-      cancelDate: user.subscription.canceledAt,
-      effectiveEndDate: user.subscription.endDate
+      cancelDate: user.subscription.canceledAt
     });
   } catch (error) {
     console.error('Error canceling subscription:', error);
@@ -265,18 +264,32 @@ const getSubscriptionStatus = async (req, res) => {
     // Prepare subscription data with all necessary fields
     const subscriptionData = user.subscription.toObject();
     
+    console.log('Subscription data before processing:', {
+      isActive: subscriptionData.isActive,
+      canceledAt: subscriptionData.canceledAt,
+      cancelAtPeriodEnd: subscriptionData.cancelAtPeriodEnd,
+      isCanceled: subscriptionData.isCanceled
+    });
+    
     // Ensure required fields are present
     const processedSubscriptionData = {
       ...subscriptionData,
       // Ensure these fields exist (using existing values if present, default values if not)
       startDate: subscriptionData.startDate || subscriptionData.cycleStartDate || null,
       endDate: subscriptionData.endDate || subscriptionData.cycleEndDate || null,
-      // Set cancellation flags
-      isCanceled: !!subscriptionData.canceledAt,
-      cancelAtPeriodEnd: !!subscriptionData.canceledAt,
+      // Properly set cancellation flags based on active status
+      isCanceled: subscriptionData.isActive ? false : !!subscriptionData.canceledAt,
+      cancelAtPeriodEnd: subscriptionData.isActive ? false : !!subscriptionData.cancelAtPeriodEnd,
+      canceledAt: subscriptionData.isActive ? null : subscriptionData.canceledAt,
       // Ensure active status is correct
       isActive: subscriptionData.isActive !== false // Default to true if not explicitly false
     };
+    
+    console.log('Subscription data after processing:', {
+      isActive: processedSubscriptionData.isActive,
+      isCanceled: processedSubscriptionData.isCanceled,
+      cancelAtPeriodEnd: processedSubscriptionData.cancelAtPeriodEnd
+    });
     
     res.json({
       success: true,
@@ -378,6 +391,28 @@ const createPaymentIntent = async (req, res) => {
     }
     
     try {
+      // Get plan details first - we'll need this later
+      const plan = await Plan.findOne({
+        $or: [
+          { monthlyPriceId: priceId },
+          { yearlyPriceId: priceId }
+        ]
+      });
+      
+      if (!plan) {
+        return res.status(404).json({
+          success: false,
+          error: 'Plan not found for the provided price ID'
+        });
+      }
+      
+      console.log('⚠️ PLAN DETAILS BEFORE CREATING SUBSCRIPTION:', {
+        name: plan.name,
+        creditsTotal: plan.creditsTotal,
+        priceId
+      });
+      
+      // Create the subscription in Stripe
       const subscription = await stripeService.createSubscription(
         req.user._id,
         priceId,
@@ -385,63 +420,130 @@ const createPaymentIntent = async (req, res) => {
         saveMethod
       );
       
+      console.log('🎉 SUBSCRIPTION CREATED:', {
+        id: subscription.id,
+        status: subscription.status
+      });
+      
+      // IMPORTANT: Double-check that user's creditsTotal is updated correctly
+      // This ensures the database reflects the correct credit amount after manual payment
+      const isYearly = billingCycle === 'yearly' || priceId === plan.yearlyPriceId;
+      
+      // Calculate end date based on billing cycle
+      const endDate = new Date();
+      endDate.setMonth(endDate.getMonth() + (isYearly ? 12 : 1));
+      
+      // Calculate cycle dates for credits
+      const cycleStartDate = new Date();
+      const cycleEndDate = new Date();
+      cycleEndDate.setDate(cycleEndDate.getDate() + 30); // 30-day credit cycle
+      
+      // Fetch user first to check current values
+      const user = await aiUser.findById(req.user._id);
+      console.log('👤 USER BEFORE UPDATE:', {
+        id: user._id,
+        subscription: {
+          plan: user.subscription?.plan,
+          creditsTotal: user.subscription?.creditsTotal,
+          creditsUsed: user.subscription?.creditsUsed,
+        }
+      });
+      // Update using direct document manipulation instead of findByIdAndUpdate
+      user.subscription.plan = plan.name.toLowerCase();
+      user.subscription.creditsTotal = plan.creditsTotal;
+      user.subscription.cycleStartDate = cycleStartDate;
+      user.subscription.cycleEndDate = cycleEndDate;
+      user.subscription.endDate = endDate;
+      user.subscription.canceledAt = null;
+      
+      // Explicitly set creditsUsed to 0 for new subscriptions
+      if (!user.subscription.creditsUsed) {
+        user.subscription.creditsUsed = 0;
+      }
+      
+      await user.save();
+      
+      // Verify the update was successful
+      const updatedUser = await aiUser.findById(req.user._id).lean();
+      console.log('👤 USER AFTER UPDATE:', {
+        id: updatedUser._id,
+        subscription: {
+          plan: updatedUser.subscription?.plan,
+          creditsTotal: updatedUser.subscription?.creditsTotal,
+          creditsUsed: updatedUser.subscription?.creditsUsed,
+        }
+      });
+      
+      // As a final fallback, if creditsTotal is still not correctly set,
+      // force an update directly to the specific field
+      if (!updatedUser.subscription?.creditsTotal || updatedUser.subscription.creditsTotal !== plan.creditsTotal) {
+        console.log('⚠️ SUBSCRIPTION CREDITS NOT UPDATED CORRECTLY, FORCING UPDATE');
+        
+        await aiUser.updateOne(
+          { _id: req.user._id }, 
+          { $set: { 'subscription.creditsTotal': plan.creditsTotal } },
+          { upsert: false }
+        );
+        
+        // Fetch again to verify
+        const finalUser = await aiUser.findById(req.user._id).lean();
+        console.log('👤 USER AFTER FORCED UPDATE:', {
+          id: finalUser._id,
+          subscription: {
+            plan: finalUser.subscription?.plan,
+            creditsTotal: finalUser.subscription?.creditsTotal,
+            creditsUsed: finalUser.subscription?.creditsUsed,
+          }
+        });
+      }
+      
       // Create a payment record directly here, so we don't rely solely on the webhook
       try {
-        // Get plan details for the payment record
-        const plan = await Plan.findOne({
-          $or: [
-            { monthlyPriceId: priceId },
-            { yearlyPriceId: priceId }
-          ]
+        // Get payment method details
+        const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+        
+        // Format payment method for storage
+        const paymentMethodData = paymentMethod ? {
+          id: paymentMethod.id,
+          brand: paymentMethod.card?.brand || 'unknown',
+          last4: paymentMethod.card?.last4 || '****',
+          expMonth: paymentMethod.card?.exp_month?.toString() || '',
+          expYear: paymentMethod.card?.exp_year?.toString() || ''
+        } : null;
+        
+        // Get the invoice and payment intent information from the subscription
+        const invoiceId = subscription.latest_invoice?.id;
+        const paymentIntentId = subscription.latest_invoice?.payment_intent?.id;
+        
+        // Determine billing cycle (monthly/yearly)
+        const isYearly = billingCycle === 'yearly' || priceId === plan.yearlyPriceId;
+        
+        // Calculate amount based on the plan
+        const amount = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
+        
+        // Create a new payment record
+        const paymentRecord = new Payment({
+          userId: req.user._id,
+          paymentId: paymentIntentId || `pi_manual_${Date.now()}`,
+          invoiceId: invoiceId || `in_manual_${Date.now()}`,
+          subscriptionId: subscription.id,
+          customerId: subscription.customer,
+          date: new Date(),
+          amount: amount,
+          currency: 'usd',
+          plan: plan.name,
+          billingCycle: isYearly ? 'yearly' : 'monthly',
+          status: 'succeeded',
+          receiptUrl: subscription.latest_invoice?.hosted_invoice_url,
+          paymentMethod: paymentMethodData,
+          metadata: {
+            description: `Subscription to ${plan.name} plan (${isYearly ? 'yearly' : 'monthly'})`,
+            createdManually: true
+          }
         });
         
-        if (plan) {
-          // Get payment method details
-          const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
-          
-          // Format payment method for storage
-          const paymentMethodData = paymentMethod ? {
-            id: paymentMethod.id,
-            brand: paymentMethod.card?.brand || 'unknown',
-            last4: paymentMethod.card?.last4 || '****',
-            expMonth: paymentMethod.card?.exp_month?.toString() || '',
-            expYear: paymentMethod.card?.exp_year?.toString() || ''
-          } : null;
-          
-          // Get the invoice and payment intent information from the subscription
-          const invoiceId = subscription.latest_invoice?.id;
-          const paymentIntentId = subscription.latest_invoice?.payment_intent?.id;
-          
-          // Determine billing cycle (monthly/yearly)
-          const isYearly = billingCycle === 'yearly' || priceId === plan.yearlyPriceId;
-          
-          // Calculate amount based on the plan
-          const amount = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
-          
-          // Create a new payment record
-          const paymentRecord = new Payment({
-            userId: req.user._id,
-            paymentId: paymentIntentId || `pi_manual_${Date.now()}`,
-            invoiceId: invoiceId || `in_manual_${Date.now()}`,
-            subscriptionId: subscription.id,
-            customerId: subscription.customer,
-            date: new Date(),
-            amount: amount,
-            currency: 'usd',
-            plan: plan.name,
-            billingCycle: isYearly ? 'yearly' : 'monthly',
-            status: 'succeeded',
-            receiptUrl: subscription.latest_invoice?.hosted_invoice_url,
-            paymentMethod: paymentMethodData,
-            metadata: {
-              description: `Subscription to ${plan.name} plan (${isYearly ? 'yearly' : 'monthly'})`,
-              createdManually: true
-            }
-          });
-          
-          await paymentRecord.save();
-          console.log(`Payment record created manually for user ${req.user._id}`);
-        }
+        await paymentRecord.save();
+        console.log(`Payment record created manually for user ${req.user._id}`);
       } catch (paymentRecordError) {
         console.error('Error creating payment record in createPaymentIntent:', paymentRecordError);
         // Continue execution even if payment record creation fails
@@ -546,37 +648,107 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
     const cycleEndDate = new Date();
     cycleEndDate.setDate(cycleEndDate.getDate() + 30); // 30-day credit cycle
     
-    // Handle pending downgrade if exists
-    if (user.subscription.pendingDowngrade && 
-        new Date(user.subscription.pendingDowngrade.scheduledDate) <= new Date()) {
-      // Apply the downgrade
-      const downgradePlanName = user.subscription.pendingDowngrade.plan;
-      const downgradePlan = await Plan.findOne({ 
-        name: downgradePlanName.charAt(0).toUpperCase() + downgradePlanName.slice(1) 
-      });
-      
-      if (downgradePlan) {
-        user.subscription.plan = downgradePlanName;
-        // Reset credits based on the new downgraded plan
-        user.subscription.creditsTotal = downgradePlan.videosCredits;
-        // Clear the pending downgrade
-        user.subscription.pendingDowngrade = undefined;
-      }
-    }
+    // Check if this is a renewal or an upgrade
+    const isNewSubscription = !user.subscription.stripeSubscriptionId;
+    const isRenewal = user.subscription.stripeSubscriptionId === subscription.id && 
+                    new Date(subscription.current_period_start * 1000).getTime() > 
+                    new Date(user.subscription.startDate).getTime();
+    const isUpgrade = !isNewSubscription && !isRenewal;
     
-    // Update subscription with new billing period and fresh credits
+    // Store current creditsUsed for upgrades
+    const currentCreditsUsed = user.subscription.creditsUsed || 0;
+    
+    // Log what type of invoice this is
+    console.log('📢 PROCESSING INVOICE PAYMENT:', {
+      userId,
+      subscriptionId: subscription.id,
+      isNewSubscription,
+      isRenewal,
+      isUpgrade,
+      currentCreditsUsed,
+      planName: plan.name,
+      planCredits: plan.creditsTotal
+    });
+    
+    console.log('👤 USER BEFORE WEBHOOK UPDATE:', {
+      id: user._id,
+      subscription: {
+        plan: user.subscription.plan,
+        creditsTotal: user.subscription.creditsTotal,
+        creditsUsed: user.subscription.creditsUsed
+      }
+    });
+    
+    // Update user with subscription details
     user.subscription.stripeSubscriptionId = subscription.id;
+    user.subscription.plan = plan.name.toLowerCase();
     user.subscription.startDate = startDate;
     user.subscription.endDate = endDate;
     user.subscription.cycleStartDate = cycleStartDate;
     user.subscription.cycleEndDate = cycleEndDate;
-    user.subscription.creditsUsed = 0;
-    user.subscription.creditsTotal = plan.videosCredits;
     user.subscription.isActive = true;
     user.subscription.billingCycle = isYearly ? 'yearly' : 'monthly';
-    user.subscription.canceledAt = undefined; // Clear cancellation if resubscribed
+    
+    // Reset any cancellation status
+    user.subscription.canceledAt = null;
+    user.subscription.cancelAtPeriodEnd = false;
+    user.subscription.isCanceled = false;
+    
+    // EXPLICITLY set the creditsTotal from the plan
+    user.subscription.creditsTotal = plan.creditsTotal || getPlanCreditLimit(plan.name.toLowerCase());
+    console.log(`✅ Setting creditsTotal to ${user.subscription.creditsTotal} via webhook`);
+    
+    // For upgrades, preserve the creditsUsed count, but update the limit
+    if (isUpgrade) {
+      user.subscription.creditsUsed = currentCreditsUsed;
+    } 
+    // For new subscriptions or renewals, reset usage counts
+    else {
+      user.subscription.creditsUsed = 0;
+    }
+    
+    console.log('👤 SUBSCRIPTION BEFORE WEBHOOK SAVE:', {
+      plan: user.subscription.plan,
+      creditsTotal: user.subscription.creditsTotal,
+      creditsUsed: user.subscription.creditsUsed
+    });
     
     await user.save();
+    
+    // Verify update was successful
+    const updatedUserFromWebhook = await aiUser.findById(userId).lean();
+    console.log('👤 USER AFTER WEBHOOK SAVE:', {
+      id: updatedUserFromWebhook._id,
+      subscription: {
+        plan: updatedUserFromWebhook.subscription.plan,
+        creditsTotal: updatedUserFromWebhook.subscription.creditsTotal,
+        creditsUsed: updatedUserFromWebhook.subscription.creditsUsed
+      }
+    });
+    
+    // As a final fallback, if creditsTotal is still not correct, 
+    // do an explicit forced update to the specific field
+    if (!updatedUserFromWebhook.subscription.creditsTotal || 
+        updatedUserFromWebhook.subscription.creditsTotal !== user.subscription.creditsTotal) {
+      console.log('⚠️ WEBHOOK: SUBSCRIPTION CREDITS NOT UPDATED CORRECTLY, FORCING UPDATE');
+      
+      await aiUser.updateOne(
+        { _id: userId }, 
+        { $set: { 'subscription.creditsTotal': user.subscription.creditsTotal } },
+        { upsert: false }
+      );
+      
+      // Fetch again to verify
+      const finalWebhookUser = await aiUser.findById(userId).lean();
+      console.log('👤 USER AFTER WEBHOOK FORCED UPDATE:', {
+        id: finalWebhookUser._id,
+        subscription: {
+          plan: finalWebhookUser.subscription.plan,
+          creditsTotal: finalWebhookUser.subscription.creditsTotal,
+          creditsUsed: finalWebhookUser.subscription.creditsUsed
+        }
+      });
+    }
     
     // Create a payment record in the database
     try {
@@ -619,21 +791,35 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
         metadata: {
           description: invoice.description,
           customerEmail: invoice.customer_email || customer.email,
-          customerName: customer.name
+          customerName: customer.name,
+          isUpgrade: isUpgrade
         }
       });
       
       await paymentRecord.save();
-      console.log(`Payment record created for user ${userId}, invoice ${invoice.id}`);
+      console.log(`Payment record created for user ${userId}, invoice ${invoice.id}${isUpgrade ? ' (upgrade)' : ''}`);
     } catch (paymentError) {
       console.error('Error creating payment record:', paymentError);
       // Continue execution even if payment record creation fails
     }
     
-    console.log(`Updated subscription for user ${userId}: Plan ${plan.name}, Credits: ${plan.videosCredits}`);
+    console.log(`Updated subscription for user ${userId}: Plan ${plan.name}, Credits: ${plan.creditsTotal}`);
   } catch (error) {
     console.error('Error handling invoice payment success:', error);
   }
+};
+
+// Helper function to get credit limit for a plan
+const getPlanCreditLimit = (planName) => {
+  const PLANS = {
+    'starter': 10,
+    'growth': 50,
+    'scale': 150,
+    'free': 2
+  };
+  
+  const normalizedName = planName.toLowerCase();
+  return PLANS[normalizedName] || 10; // Default to 10 if plan not found
 };
 
 const handleInvoicePaymentFailed = async (invoice) => {
@@ -655,13 +841,48 @@ const handleSubscriptionDeleted = async (subscription) => {
     const customer = await stripe.customers.retrieve(subscription.customer);
     const userId = customer.metadata.userId;
     
-    // Downgrade to free plan
-    await aiUser.findByIdAndUpdate(userId, {
-      'subscription.plan': 'free',
-      'subscription.stripeSubscriptionId': null,
-      'subscription.isActive': false,
-      'subscription.videosLimit': 2, // Free tier limit
-      'subscription.billingCycle': 'none'
+    console.log(`📅 HANDLING SUBSCRIPTION DELETED for user ${userId}`);
+    
+    // Get the user
+    const user = await aiUser.findById(userId);
+    
+    if (!user) {
+      console.error(`User ${userId} not found for subscription deleted event`);
+      return;
+    }
+    
+    console.log('👤 USER SUBSCRIPTION BEFORE DELETION HANDLING:', {
+      plan: user.subscription?.plan,
+      isActive: user.subscription?.isActive,
+      creditsTotal: user.subscription?.creditsTotal,
+      creditsUsed: user.subscription?.creditsUsed,
+      endDate: user.subscription?.endDate
+    });
+    
+    // Get current subscription details to preserve
+    const currentCreditsTotal = user.subscription?.creditsTotal || 0;
+    const currentCreditsUsed = user.subscription?.creditsUsed || 0;
+    
+    // Update user to free plan but keep their remaining credits
+    user.subscription.plan = 'free';
+    user.subscription.stripeSubscriptionId = null;
+    user.subscription.isActive = false; // Mark as inactive when canceled
+    user.subscription.creditsTotal = currentCreditsTotal; // Keep their remaining credits
+    user.subscription.creditsUsed = currentCreditsUsed; // Keep their used credits
+    user.subscription.billingCycle = 'none';
+    user.subscription.canceledAt = new Date();
+    user.subscription.cancelAtPeriodEnd = false;
+    
+    await user.save();
+    
+    // Verify update was successful
+    const updatedUser = await aiUser.findById(userId).lean();
+    console.log('👤 USER AFTER SUBSCRIPTION DELETION HANDLING:', {
+      plan: updatedUser.subscription?.plan,
+      isActive: updatedUser.subscription?.isActive, 
+      creditsTotal: updatedUser.subscription?.creditsTotal,
+      creditsUsed: updatedUser.subscription?.creditsUsed,
+      endDate: updatedUser.subscription?.endDate
     });
   } catch (error) {
     console.error('Error handling subscription deleted:', error);
@@ -729,14 +950,21 @@ const verifySession = async (req, res) => {
     const endDate = new Date();
     endDate.setMonth(endDate.getMonth() + (isYearly ? 12 : 1));
     
+    // Calculate credit cycle dates (30-day cycle regardless of billing period)
+    const cycleStartDate = new Date();
+    const cycleEndDate = new Date();
+    cycleEndDate.setDate(cycleEndDate.getDate() + 30);
+    
     // Update user's subscription info
     await aiUser.findByIdAndUpdate(userId, {
       'subscription.plan': plan.name.toLowerCase(),
       'subscription.stripeSubscriptionId': subscription.id,
       'subscription.startDate': new Date(),
       'subscription.endDate': endDate,
-      'subscription.videosLimit': plan.videosLimit,
-      'subscription.videosUsed': 0,
+      'subscription.cycleStartDate': cycleStartDate,
+      'subscription.cycleEndDate': cycleEndDate,
+      'subscription.creditsTotal': plan.creditsTotal,
+      'subscription.creditsUsed': 0,
       'subscription.isActive': true,
       'subscription.billingCycle': isYearly ? 'yearly' : 'monthly',
       'subscription.price': isYearly ? plan.yearlyPrice / 12 : plan.monthlyPrice, // monthly equivalent price
@@ -786,7 +1014,9 @@ const createBillingPortalSession = async (req, res) => {
   }
 };
 
-// Get user's subscription usage stats
+// @desc    Get subscription usage stats
+// @route   GET /api/subscriptions/usage
+// @access  Private
 const getSubscriptionUsage = async (req, res) => {
   try {
     const user = await aiUser.findById(req.user._id);
@@ -798,41 +1028,27 @@ const getSubscriptionUsage = async (req, res) => {
       });
     }
     
-    const subscription = user.subscription || {};
-    
-    // Calculate videos remaining
-    const videosRemaining = Math.max(0, (subscription.videosLimit || 0) - (subscription.videosUsed || 0));
+    const subscription = user.subscription;
     
     // Calculate days until reset
-    let daysUntilReset = null;
-    if (subscription.endDate) {
-      const now = new Date();
-      const endDate = new Date(subscription.endDate);
-      
-      // Reset hours to compare just the dates
-      now.setHours(0, 0, 0, 0);
-      endDate.setHours(0, 0, 0, 0);
-      
-      const diffTime = endDate - now;
-      daysUntilReset = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    }
+    const today = new Date();
+    const cycleEndDate = subscription.cycleEndDate || new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const daysUntilReset = Math.max(0, Math.ceil((cycleEndDate - today) / (1000 * 60 * 60 * 24)));
     
+    // Calculate credits remaining (total - used)
+    const creditsRemaining = Math.max(0, (subscription.creditsTotal || 0) - (subscription.creditsUsed || 0));
+    
+    // Return usage data
     res.json({
       success: true,
       usage: {
-        videosUsed: subscription.videosUsed || 0,
-        videosLimit: subscription.videosLimit || 0,
-        videosRemaining: videosRemaining,
+        creditsUsed: subscription.creditsUsed || 0,
+        creditsTotal: subscription.creditsTotal || 0,
+        creditsRemaining: creditsRemaining,
+        daysUntilReset: daysUntilReset,
         plan: subscription.plan || 'free',
-        isActive: subscription.isActive || false,
-        endDate: subscription.endDate,
-        daysUntilReset,
-        billingCycle: subscription.billingCycle || 'none',
-        // Include cancellation status flags
-        cancelAtPeriodEnd: !!subscription.cancelAtPeriodEnd,
-        isCanceled: !!subscription.canceledAt,
-        canceledAt: subscription.canceledAt || null,
-        startDate: subscription.startDate || subscription.cycleStartDate || null
+        planDisplayName: subscription.plan ? 
+          subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1) : 'Free'
       }
     });
   } catch (error) {
@@ -849,63 +1065,81 @@ const getSubscriptionUsage = async (req, res) => {
 // @access  Private
 const upgradeSubscription = async (req, res) => {
   try {
-    const { newPlan } = req.body;
+    const { plan: newPlan } = req.body;
     
     if (!newPlan) {
       return res.status(400).json({
         success: false,
-        error: 'New plan is required'
+        error: 'No plan specified for upgrade'
       });
     }
     
-    const userId = req.user._id;
-    const user = await aiUser.findById(userId);
+    const user = await aiUser.findById(req.user._id);
     
-    if (!user || !user.subscription.isActive) {
-      return res.status(400).json({
-        success: false,
-        error: 'User does not have an active subscription'
-      });
-    }
-    
-    // Check if new plan is actually an upgrade
-    const currentPlanName = user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1);
-    const newPlanFormatted = newPlan.charAt(0).toUpperCase() + newPlan.slice(1);
-    
-    // Get plan details
-    const [currentPlan, upgradePlan] = await Promise.all([
-      Plan.findOne({ name: currentPlanName }),
-      Plan.findOne({ name: newPlanFormatted })
-    ]);
-    
-    if (!currentPlan || !upgradePlan) {
+    if (!user) {
       return res.status(404).json({
         success: false,
-        error: 'Plan not found'
+        error: 'User not found'
       });
     }
     
-    // Verify it's actually an upgrade
-    const isYearly = user.subscription.billingCycle === 'yearly';
-    const currentPrice = isYearly ? currentPlan.yearlyPrice : currentPlan.monthlyPrice;
-    const newPrice = isYearly ? upgradePlan.yearlyPrice : upgradePlan.monthlyPrice;
-    
-    if (newPrice <= currentPrice) {
+    if (!user.subscription || !user.subscription.isActive) {
       return res.status(400).json({
         success: false,
-        error: 'New plan must be an upgrade from current plan'
+        error: 'No active subscription found'
       });
     }
     
-    // Calculate prorated cost and credits
-    const prorationDetails = await subscriptionScheduler.calculateProration(userId, newPlan);
-    
-    if (!prorationDetails.success) {
-      return res.status(500).json({
+    if (!user.stripeCustomerId || !user.subscription.stripeSubscriptionId) {
+      return res.status(400).json({
         success: false,
-        error: prorationDetails.error
+        error: 'No valid Stripe subscription found'
       });
     }
+    
+    // Get the upgrade plan details
+    const upgradePlan = await Plan.findOne({
+      name: newPlan.charAt(0).toUpperCase() + newPlan.slice(1)
+    });
+    
+    if (!upgradePlan) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid upgrade plan selected'
+      });
+    }
+    
+    console.log('Current plan:', user.subscription.plan);
+    console.log('Upgrade plan:', upgradePlan.name);
+    
+    // Check if this is actually an upgrade
+    if (user.subscription.plan === newPlan.toLowerCase()) {
+      return res.status(400).json({
+        success: false,
+        error: 'You are already on this plan'
+      });
+    }
+    
+    // Get the current plan for pricing comparisons
+    const currentPlan = await Plan.findOne({
+      name: user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1)
+    });
+    
+    if (!currentPlan) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid current plan'
+      });
+    }
+    
+    // Check if the current billing cycle is monthly or yearly
+    const isYearly = user.subscription.billingCycle === 'yearly';
+    
+    // Calculate proration details
+    const prorationDetails = await subscriptionScheduler.calculateProration(
+      user._id,
+      newPlan
+    );
     
     // Prepare upgrade in Stripe
     const stripeUpgradeResult = await stripeService.updateSubscription(
@@ -922,17 +1156,92 @@ const upgradeSubscription = async (req, res) => {
       });
     }
     
+    // Store the current creditsUsed value
+    const currentCreditsUsed = user.subscription.creditsUsed || 0;
+    
+    // Log relevant info for debugging
+    console.log('👤 USER BEFORE UPGRADE:', {
+      id: user._id,
+      subscription: {
+        plan: user.subscription.plan,
+        creditsTotal: user.subscription.creditsTotal,
+        creditsUsed: currentCreditsUsed
+      }
+    });
+    
+    console.log('🔼 UPGRADE PLAN DETAILS:', {
+      name: upgradePlan.name,
+      creditsTotal: upgradePlan.creditsTotal,
+      fallbackLimit: getPlanCreditLimit(newPlan.toLowerCase())
+    });
+    
     // Update user subscription
     user.subscription.plan = newPlan.toLowerCase();
-    user.subscription.creditsTotal += prorationDetails.additionalCredits;
     
+    // EXPLICITLY set the creditsTotal from the plan
+    user.subscription.creditsTotal = upgradePlan.creditsTotal || getPlanCreditLimit(newPlan.toLowerCase());
+    console.log(`✅ Setting creditsTotal to ${user.subscription.creditsTotal}`);
+    
+    // Keep the used credits the same
+    user.subscription.creditsUsed = currentCreditsUsed;
+    
+    // Add any additional credits from proration
+    if (prorationDetails.additionalCredits && prorationDetails.additionalCredits > 0) {
+      user.subscription.creditsTotal += prorationDetails.additionalCredits;
+      console.log(`➕ Adding ${prorationDetails.additionalCredits} additional credits from proration, new total: ${user.subscription.creditsTotal}`);
+    }
+    
+    console.log('👤 SUBSCRIPTION BEFORE SAVE:', {
+      plan: user.subscription.plan,
+      creditsTotal: user.subscription.creditsTotal,
+      creditsUsed: user.subscription.creditsUsed
+    });
+    
+    // Save user with updated subscription
     await user.save();
+    
+    // Verify update was successful
+    const updatedUser = await aiUser.findById(user._id).lean();
+    console.log('👤 USER AFTER UPGRADE SAVE:', {
+      id: updatedUser._id,
+      subscription: {
+        plan: updatedUser.subscription.plan,
+        creditsTotal: updatedUser.subscription.creditsTotal,
+        creditsUsed: updatedUser.subscription.creditsUsed
+      }
+    });
+    
+    // As a final fallback, if creditsTotal is still not correct, 
+    // do an explicit forced update to the specific field
+    if (!updatedUser.subscription.creditsTotal || updatedUser.subscription.creditsTotal !== user.subscription.creditsTotal) {
+      console.log('⚠️ SUBSCRIPTION CREDITS NOT UPDATED CORRECTLY, FORCING UPDATE');
+      
+      await aiUser.updateOne(
+        { _id: user._id }, 
+        { $set: { 'subscription.creditsTotal': user.subscription.creditsTotal } },
+        { upsert: false }
+      );
+      
+      // Fetch again to verify
+      const finalUser = await aiUser.findById(user._id).lean();
+      console.log('👤 USER AFTER FORCED UPDATE:', {
+        id: finalUser._id,
+        subscription: {
+          plan: finalUser.subscription.plan,
+          creditsTotal: finalUser.subscription.creditsTotal,
+          creditsUsed: finalUser.subscription.creditsUsed
+        }
+      });
+    }
     
     res.json({
       success: true,
       message: 'Subscription upgraded successfully',
       upgrade: prorationDetails,
-      subscription: user.subscription
+      subscription: {
+        ...updatedUser.subscription,
+        creditsRemaining: updatedUser.subscription.creditsTotal - updatedUser.subscription.creditsUsed
+      }
     });
   } catch (error) {
     console.error('Error upgrading subscription:', error);
@@ -1129,6 +1438,101 @@ const resetUserCycle = async (req, res) => {
   }
 };
 
+// @desc    Fix subscription credits (admin only)
+// @route   POST /api/subscriptions/fix-credits
+// @access  Private/Admin
+const fixSubscriptionCredits = async (req, res) => {
+  try {
+    // Get all users with active subscriptions
+    const users = await aiUser.find({
+      'subscription.isActive': true
+    });
+    
+    console.log(`Found ${users.length} users with active subscriptions to check`);
+    
+    const updates = [];
+    
+    // Process each user
+    for (const user of users) {
+      // Skip users without a subscription plan
+      if (!user.subscription || !user.subscription.plan) continue;
+      
+      // Get the plan
+      const planName = user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1);
+      const plan = await Plan.findOne({ name: planName });
+      
+      if (!plan) {
+        console.log(`⚠️ Plan not found for user ${user._id}: ${planName}`);
+        continue;
+      }
+      
+      // Check if creditsTotal needs to be updated
+      if (user.subscription.creditsTotal === undefined || user.subscription.creditsTotal !== plan.creditsTotal) {
+        const oldValue = user.subscription.creditsTotal;
+        user.subscription.creditsTotal = plan.creditsTotal;
+        await user.save();
+        
+        updates.push({
+          userId: user._id,
+          plan: planName,
+          oldCreditsTotal: oldValue,
+          newCreditsTotal: plan.creditsTotal
+        });
+        
+        console.log(`✅ Updated user ${user._id}: ${planName} - creditsTotal: ${oldValue} → ${plan.creditsTotal}`);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Checked ${users.length} users, updated ${updates.length} subscriptions`,
+      updates
+    });
+  } catch (error) {
+    console.error('Error fixing subscription credits:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
+// @desc    Check for expired subscriptions (admin only)
+// @route   POST /api/subscriptions/check-expired
+// @access  Private/Admin
+const checkExpiredSubscriptionsEndpoint = async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to perform this action'
+      });
+    }
+    
+    const result = await subscriptionScheduler.checkExpiredSubscriptions();
+    
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: result.error
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: `Checked expired subscriptions, downgraded ${result.downgraded} accounts`,
+      result
+    });
+  } catch (error) {
+    console.error('Error checking expired subscriptions:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
 module.exports = { 
   createSubscription, 
   getCurrentSubscription, 
@@ -1145,5 +1549,7 @@ module.exports = {
   upgradeSubscription,
   downgradeSubscription,
   useCredit,
-  resetUserCycle
+  resetUserCycle,
+  fixSubscriptionCredits,
+  checkExpiredSubscriptionsEndpoint
 }; 

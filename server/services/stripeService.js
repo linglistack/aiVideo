@@ -112,8 +112,8 @@ const createSubscription = async (userId, priceId, paymentMethodId, saveMethod =
         'subscription.stripeSubscriptionId': subscription.id,
         'subscription.startDate': new Date(),
         'subscription.endDate': endDate,
-        'subscription.videosLimit': plan.videosLimit,
-        'subscription.videosUsed': 0,
+        'subscription.creditsTotal': plan.creditsTotal,
+        'subscription.creditsUsed': 0,
         'subscription.isActive': true,
         'subscription.billingCycle': isYearly ? 'yearly' : 'monthly',
         'subscription.price': isYearly ? plan.yearlyPrice / 12 : plan.monthlyPrice, // monthly equivalent price
@@ -291,6 +291,13 @@ const createBillingPortalSession = async (userId, returnUrl) => {
  */
 const updateSubscription = async (customerId, subscriptionId, newPriceId, proratedAmount) => {
   try {
+    console.log('⏫ UPDATING SUBSCRIPTION in stripeService:', {
+      customerId,
+      subscriptionId,
+      newPriceId,
+      proratedAmount
+    });
+    
     // Retrieve the subscription
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     
@@ -316,12 +323,18 @@ const updateSubscription = async (customerId, subscriptionId, newPriceId, prorat
       }
     });
     
+    console.log('✅ STRIPE SUBSCRIPTION UPDATED:', {
+      id: updatedSubscription.id,
+      status: updatedSubscription.status,
+      currentPeriodEnd: new Date(updatedSubscription.current_period_end * 1000)
+    });
+    
     return {
       success: true,
       subscription: updatedSubscription
     };
   } catch (error) {
-    console.error('Error updating subscription:', error);
+    console.error('❌ ERROR UPDATING SUBSCRIPTION:', error);
     return {
       success: false,
       error: error.message

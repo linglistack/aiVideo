@@ -149,7 +149,7 @@ const Pricing = () => {
               </div>
               
               <div className="text-center mb-6 text-gray-700">
-                {billingCycle === 'monthly' ? plan.videosLimit : plan.videosLimit * 12} videos per {billingCycle === 'monthly' ? 'month' : 'year'}
+                {billingCycle === 'monthly' ? plan.creditsTotal : plan.creditsTotal * 12} credits per {billingCycle === 'monthly' ? 'month' : 'year'}
               </div>
               
               <div className="border-t border-gray-200 my-4"></div>
@@ -158,7 +158,7 @@ const Pricing = () => {
                 <ul className="space-y-4 mb-8">
                   <li className="flex items-start">
                     <span className="text-gray-900 inline-block w-6">🎥</span>
-                    <span className="ml-2 text-gray-700">{plan.videosLimit} videos per month</span>
+                    <span className="ml-2 text-gray-700">{plan.creditsTotal} credits per month</span>
                   </li>
                   
                   <li className="flex items-start">

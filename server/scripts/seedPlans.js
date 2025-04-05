@@ -115,7 +115,7 @@ const seedPlans = async () => {
         yearlyPriceId: priceIds.starterYearly,
         monthlyPrice: 19,
         yearlyPrice: 190,
-        videosLimit: 10,
+        creditsTotal: 10,
         active: true
       },
       {
@@ -133,7 +133,7 @@ const seedPlans = async () => {
         yearlyPriceId: priceIds.growthYearly,
         monthlyPrice: 49,
         yearlyPrice: 490,
-        videosLimit: 50,
+        creditsTotal: 50,
         active: true
       },
       {
@@ -151,7 +151,7 @@ const seedPlans = async () => {
         yearlyPriceId: priceIds.scaleYearly,
         monthlyPrice: 95,
         yearlyPrice: 950,
-        videosLimit: 150,
+        creditsTotal: 150,
         active: true
       }
     ];

@@ -13,7 +13,9 @@ const {
   upgradeSubscription,
   downgradeSubscription,
   useCredit,
-  resetUserCycle
+  resetUserCycle,
+  fixSubscriptionCredits,
+  checkExpiredSubscriptionsEndpoint
 } = require('../controllers/subscriptionController');
 const { protect, admin } = require('../middleware/authMiddleware');
 
@@ -46,6 +48,12 @@ router.post('/use-credit', protect, useCredit);
 
 // Reset user's credit cycle (admin only)
 router.post('/reset-cycle/:userId', protect, resetUserCycle);
+
+// Fix subscription credits (admin only)
+router.post('/fix-credits', protect, admin, fixSubscriptionCredits);
+
+// Check expired subscriptions (admin only)
+router.post('/check-expired', protect, admin, checkExpiredSubscriptionsEndpoint);
 
 // Stripe webhook
 router.post('/webhook', express.raw({ type: 'application/json' }), handleWebhook);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { getProfile, refreshToken, updateProfile, changePassword, deleteAccount } from '../../services/authService';
 import { savePaymentMethod, getPaymentMethods, deletePaymentMethod, getPaymentHistory, setDefaultPaymentMethod } from '../../services/paymentService';
@@ -64,6 +64,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   const [selectedBillingCycle, setSelectedBillingCycle] = useState('monthly');
   const [cancelReason, setCancelReason] = useState('');
   const [paymentHistory, setPaymentHistory] = useState([]);
+  const [freshSubscription, setFreshSubscription] = useState(null);
+  const [loadingFreshData, setLoadingFreshData] = useState(false);
   const fileInputRef = useRef(null);
   
   // Payment tab state
@@ -75,6 +77,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     nameOnCard: ''
   });
   const [paymentMethods, setPaymentMethods] = useState([]);
+  const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
   const [loadingPaymentHistory, setLoadingPaymentHistory] = useState(false);
   
   // Avatar state - placeholder for future implementation
@@ -129,49 +132,27 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         
         // Always fetch payment methods on load to ensure they're up to date
         try {
-          // Try to get token directly from localStorage for reliability
-          let token = null;
-          const userString = localStorage.getItem('user');
-          if (userString) {
-            const userData = JSON.parse(userString);
-            if (userData && userData.token) {
-              token = userData.token;
+          // Try to get token directly from user prop
+          if (!user?.token) {
+            console.error('No token available to fetch payment methods');
+            return;
+          }
+          
+          console.log('Fetching payment methods on initial load...');
+          const paymentResponse = await getPaymentMethods(user.token);
+          if (paymentResponse.success && paymentResponse.methods) {
+            console.log('Payment methods fetched:', paymentResponse.methods);
+            setPaymentMethods(paymentResponse.methods);
+            
+            // If we have payment methods, update the user object
+            if (paymentResponse.methods.length > 0) {
+              // Update app state with the payment methods
+              setUser(prevUser => ({
+                ...prevUser,
+                paymentMethod: paymentResponse.methods[0],
+                paymentMethods: paymentResponse.methods
+              }));
             }
-          }
-          
-          // Use profile response token as fallback
-          if (!token && profileResponse.success) {
-            token = profileResponse.user.token;
-          }
-          
-          // Use user prop token as last resort
-          if (!token && user?.token) {
-            token = user.token;
-          }
-          
-          if (token) {
-            console.log('Fetching payment methods on initial load...');
-            const paymentResponse = await getPaymentMethods(token);
-            if (paymentResponse.success && paymentResponse.methods) {
-              console.log('Payment methods fetched:', paymentResponse.methods);
-              setPaymentMethods(paymentResponse.methods);
-              
-              // If we have payment methods, update the user object
-              if (paymentResponse.methods.length > 0) {
-                const updatedUser = JSON.parse(localStorage.getItem('user')) || user || {};
-                updatedUser.paymentMethod = paymentResponse.methods[0];
-                updatedUser.paymentMethods = paymentResponse.methods;
-                localStorage.setItem('user', JSON.stringify(updatedUser));
-                
-                // Update app state if we aren't already using user from profile response
-                if (!profileResponse.success) {
-                  setUser(updatedUser);
-                }
-              }
-            }
-          } else if (user?.paymentMethods && user.paymentMethods.length > 0) {
-            // If no API call but user already has payment methods, use those
-            setPaymentMethods(user.paymentMethods);
           }
         } catch (error) {
           console.error('Failed to load payment methods:', error);
@@ -192,32 +173,71 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     fetchData();
   }, []); // Empty dependency array so it only runs once on mount
   
+  // Function to refresh subscription data directly from the backend
+  // Updates the user context with fresh data from the server
+  const refreshSubscriptionData = useCallback(async () => {
+    try {
+      setLoadingFreshData(true);
+      console.log('Fetching fresh subscription data from backend...');
+      
+      // Get fresh subscription data
+      const response = await subscriptionService.getSubscriptionStatus();
+      
+      if (response.success && response.subscription) {
+        console.log('Received fresh subscription data:', response.subscription);
+        
+        // Update local state with fresh data
+        setFreshSubscription(response.subscription);
+        
+        // Update global user state with backend data
+        setUser(prevUser => ({
+          ...prevUser,
+          subscription: response.subscription
+        }));
+        
+        // Also fetch usage data if we have a function to update it
+        if (typeof setSubscriptionUsage === 'function') {
+          try {
+            const usageResponse = await subscriptionService.getSubscriptionUsage();
+            if (usageResponse.success) {
+              setSubscriptionUsage(usageResponse.usage);
+            }
+          } catch (usageError) {
+            console.error('Error fetching usage data:', usageError);
+          }
+        }
+        
+        return response.subscription;
+      } else {
+        console.error('Failed to fetch subscription data:', response.error);
+        return null;
+      }
+    } catch (error) {
+      console.error('Error refreshing subscription data:', error);
+      return null;
+    } finally {
+      setLoadingFreshData(false);
+    }
+  }, []); // Empty dependency array to prevent infinite loops
+  
+  // Fetch fresh subscription data when component mounts - only once
+  useEffect(() => {
+    refreshSubscriptionData();
+  }, [refreshSubscriptionData]);
+  
   // Fetch payment history from server
   const fetchPaymentHistory = async () => {
     try {
       setLoadingPaymentHistory(true);
-      // Get token directly from localStorage for reliability
-      let token = null;
-      const userString = localStorage.getItem('user');
-      if (userString) {
-        const userData = JSON.parse(userString);
-        if (userData && userData.token) {
-          token = userData.token;
-        }
-      }
       
-      // Use the component user state token as fallback
-      if (!token && user?.token) {
-        token = user.token;
-      }
-      
-      if (!token) {
+      // Use the user prop directly instead of localStorage
+      if (!user?.token) {
         console.warn('No token available to fetch payment history');
         return;
       }
       
       console.log('Fetching payment history...');
-      const response = await getPaymentHistory(token);
+      const response = await getPaymentHistory(user.token);
       
       if (response.success && response.payments) {
         console.log('Payment history fetched:', response.payments);
@@ -266,58 +286,38 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     }
     
     try {
-      // Get token directly from localStorage for reliability
-      let token = null;
-      const userString = localStorage.getItem('user');
-      if (userString) {
-        const userData = JSON.parse(userString);
-        if (userData && userData.token) {
-          token = userData.token;
-        }
-      }
-      
-      // Use the component user state token as fallback
-      if (!token && user?.token) {
-        token = user.token;
-      }
-      
-      if (!token) {
-        // Fallback to using payment methods from user object
-        if (user?.paymentMethods && user.paymentMethods.length > 0) {
-          setPaymentMethods(user.paymentMethods);
-        }
+      // Use the user prop directly instead of localStorage
+      if (!user?.token) {
+        console.error('No token available to fetch payment methods');
         return;
       }
       
-      const response = await getPaymentMethods(token);
+      setLoadingPaymentMethods(true);
+      console.log('Fetching payment methods...');
+      
+      const response = await getPaymentMethods(user.token);
+      
       if (response.success && response.methods) {
+        console.log('Payment methods fetched:', response.methods);
         setPaymentMethods(response.methods);
         
-        // If payment methods were fetched, update the user state without localStorage
+        // Update user state if we have payment methods
         if (response.methods.length > 0) {
-          // Only update user state if needed
-          if (!user.paymentMethods || 
-              JSON.stringify(user.paymentMethods) !== JSON.stringify(response.methods)) {
-            const updatedUser = { ...user };
-            // Find the default payment method or use the first one
-            const defaultMethod = response.methods.find(m => m.isDefault) || response.methods[0];
-            updatedUser.paymentMethod = defaultMethod;
-            updatedUser.paymentMethods = response.methods;
-            setUser(updatedUser);
-          }
+          setUser(prevUser => ({
+            ...prevUser,
+            paymentMethod: response.methods[0],
+            paymentMethods: response.methods
+          }));
         }
       } else {
-        // Fallback to using payment methods from user object
-        if (user?.paymentMethods && user.paymentMethods.length > 0) {
-          setPaymentMethods(user.paymentMethods);
-        }
+        console.warn('No payment methods returned from API');
+        setPaymentMethods([]);
       }
     } catch (error) {
       console.error('Failed to fetch payment methods:', error);
-      // Fallback to using payment methods from user object
-      if (user?.paymentMethods && user.paymentMethods.length > 0) {
-        setPaymentMethods(user.paymentMethods);
-      }
+      setError('Failed to load payment methods');
+    } finally {
+      setLoadingPaymentMethods(false);
     }
   };
   
@@ -364,126 +364,94 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     }
   };
   
-  // Update profile with avatar
+  // Handle profile update
   const handleUpdateProfile = async (e) => {
     e.preventDefault();
+    setLoading(true);
     setError('');
     setSuccess('');
-    setLoading(true);
     
     try {
-      // Create form data to handle file upload
+      // Create form data for API
       const formData = new FormData();
+      formData.append('name', profileForm.name);
+      formData.append('email', profileForm.email);
       
-      // Add profile form fields
-      Object.keys(profileForm).forEach(key => {
-        formData.append(key, profileForm[key]);
-      });
+      if (profileForm.phone) {
+        formData.append('phone', profileForm.phone);
+      }
       
-      // Add avatar file if exists
+      if (profileForm.company) {
+        formData.append('company', profileForm.company);
+      }
+      
+      // If we have a new avatar, add it to the form data
       if (avatarFile) {
         formData.append('avatar', avatarFile);
       }
       
-      // Use the imported updateProfile service
+      // Call API to update profile
       const response = await updateProfile(formData);
       
       if (response.success) {
-        setSuccess('Profile updated successfully!');
+        // Update the user state with the returned user data
+        setUser(prevUser => ({
+          ...prevUser,
+          ...response.user
+        }));
         
-        // Update user state with the response data
-        setUser(response.user);
-        
-        // Update avatar state
+        // Update avatar if it was changed
         if (response.user.avatar) {
           setAvatar(response.user.avatar);
         }
         
-        // Clear the file after successful upload
-        setAvatarFile(null);
+        setSuccess('Profile updated successfully!');
         
-        // Auto dismiss success message after 3 seconds
-        setTimeout(() => setSuccess(''), 3000);
+        // Reset avatar file state
+        setAvatarFile(null);
+        setAvatarPreview('');
       } else {
-        throw new Error(response.error || 'Failed to update profile');
+        // Handle API error
+        setError(response.error || 'Failed to update profile');
       }
     } catch (error) {
+      console.error('Profile update error:', error);
       setError(error.message || 'Failed to update profile');
-      console.error(error);
     } finally {
       setLoading(false);
     }
   };
   
-  // Change password
+  // Handle password change
   const handleChangePassword = async (e) => {
     e.preventDefault();
+    setLoading(true);
     setError('');
     setSuccess('');
     
-    // Validate passwords match
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setError("New passwords don't match");
-      return;
-    }
-    
-    setLoading(true);
-    
     try {
-      // First, refresh the token to ensure we have the latest valid one
-      const refreshResult = await refreshToken();
+      const response = await changePassword({
+        currentPassword: passwordForm.currentPassword,
+        newPassword: passwordForm.newPassword
+      });
       
-      if (!refreshResult.success) {
-        setError(`${refreshResult.error} Please try logging out and back in.`);
-        setLoading(false);
-        return;
-      }
-      
-      // Only update the user state if there are actual changes
-      const hasUserChanges = JSON.stringify(user) !== JSON.stringify(refreshResult.user);
-      if (hasUserChanges) {
-        console.log('Updating user with refreshed data');
-        setUser(refreshResult.user);
-      }
-      
-      // Get fresh user data from the refreshResult
-      const currentUser = refreshResult.user;
-      
-      console.log('Sending change password request with refreshed token');
-      
-      const response = await axios.put(
-        'http://localhost:5000/api/auth/change-password',
-        {
-          currentPassword: passwordForm.currentPassword,
-          newPassword: passwordForm.newPassword
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${currentUser.token}`
-          }
-        }
-      );
-      
-      if (response.data.success) {
-        setSuccess(response.data.message || 'Password changed successfully!');
+      if (response.success) {
+        setSuccess(response.message || 'Password changed successfully!');
         setPasswordForm({
           currentPassword: '',
           newPassword: '',
           confirmPassword: ''
         });
         
-        // Auto dismiss success message after 3 seconds
-        setTimeout(() => setSuccess(''), 3000);
-        
-        // Update the user object with hasPassword flag only if needed
-        if (response.data.hasPassword && (!user.hasPassword || user.hasPassword !== true)) {
-          const updatedUser = { 
-            ...currentUser, 
-            hasPassword: true 
-          };
-          localStorage.setItem('user', JSON.stringify(updatedUser));
-          setUser(updatedUser);
+        // Update the user object with hasPassword flag if needed
+        if (response.hasPassword && (!user.hasPassword || user.hasPassword !== true)) {
+          setUser(prevUser => ({
+            ...prevUser,
+            hasPassword: true
+          }));
         }
+      } else {
+        setError(response.error || 'Failed to change password');
       }
     } catch (error) {
       console.error('Password change error:', error);
@@ -503,23 +471,17 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     setLoading(true);
     
     try {
-      const response = await axios.delete(
-        'http://localhost:5000/api/auth/account',
-        {
-          headers: {
-            Authorization: `Bearer ${user.token}`
-          }
-        }
-      );
+      const response = await deleteAccount();
       
-      if (response.data.success) {
+      if (response.success) {
         // Clear user data and redirect to home
-        localStorage.removeItem('user');
         setUser(null);
         navigate('/');
+      } else {
+        setError(response.error || 'Failed to delete account');
       }
     } catch (error) {
-      setError(error.response?.data?.error || 'Failed to delete account');
+      setError(error.message || 'Failed to delete account');
       console.error(error);
       setShowDeleteAccountConfirmation(false);
     } finally {
@@ -571,21 +533,17 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       setSuccess('Payment method added successfully!');
       setShowAddCardModal(false);
       
-      // Update the user object with the returned payment method
-      const updatedUser = { 
-        ...user, 
+      // Update the user state with the returned payment method
+      setUser(prevUser => ({
+        ...prevUser,
         paymentMethod: response.paymentMethod || {
           // Fallback in case API doesn't return the expected format
           last4: cardForm.cardNumber.slice(-4),
           brand: 'visa',
           expMonth: cardForm.expiryMonth,
           expYear: cardForm.expiryYear
-        } 
-      };
-      
-      // Update local storage and user state
-      localStorage.setItem('user', JSON.stringify(updatedUser));
-      setUser(updatedUser);
+        }
+      }));
       
       // Reset card form
       setCardForm({
@@ -626,26 +584,22 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       await deletePaymentMethod(methodId, user.token);
       
       // Update the user object to remove the payment method
-      const updatedUser = { ...user };
+      const updatedPaymentMethods = user.paymentMethods ? 
+        user.paymentMethods.filter(method => method.id !== methodId) : 
+        [];
       
-      // If deleting the default payment method
-      if (updatedUser.paymentMethod && updatedUser.paymentMethod.id === methodId) {
-        delete updatedUser.paymentMethod;
-      }
+      // If deleting the default payment method, set a new default if available
+      let updatedDefaultPaymentMethod = user.paymentMethod;
       
-      // Remove from the payment methods array
-      if (updatedUser.paymentMethods && Array.isArray(updatedUser.paymentMethods)) {
-        updatedUser.paymentMethods = updatedUser.paymentMethods.filter(
-          method => method.id !== methodId
-        );
-        
-        // If we deleted the default and have other payment methods, set the first one as default
-        if (!updatedUser.paymentMethod && updatedUser.paymentMethods.length > 0) {
-          updatedUser.paymentMethod = updatedUser.paymentMethods[0];
+      if (updatedDefaultPaymentMethod && updatedDefaultPaymentMethod.id === methodId) {
+        updatedDefaultPaymentMethod = updatedPaymentMethods.length > 0 ? 
+          updatedPaymentMethods[0] : 
+          null;
           
-          // Also update the default in the database
+        // Also update the default in the database
+        if (updatedDefaultPaymentMethod) {
           try {
-            await setDefaultPaymentMethod(updatedUser.paymentMethod.id, user.token);
+            await setDefaultPaymentMethod(updatedDefaultPaymentMethod.id, user.token);
           } catch (error) {
             console.error('Error setting new default payment method:', error);
             // Continue anyway
@@ -653,23 +607,23 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         }
       }
       
-      // Update local storage and state
-      localStorage.setItem('user', JSON.stringify(updatedUser));
-      setUser(updatedUser);
+      // Update local state
+      setPaymentMethods(updatedPaymentMethods);
       
-      // Also update the paymentMethods state to reflect the change immediately in UI
-      setPaymentMethods(prevMethods => {
-        if (!prevMethods) return [];
-        return prevMethods.filter(method => method.id !== methodId);
-      });
+      // Update global user state
+      setUser(prevUser => ({
+        ...prevUser,
+        paymentMethod: updatedDefaultPaymentMethod,
+        paymentMethods: updatedPaymentMethods
+      }));
       
-      setSuccess('Payment method removed successfully!');
+      setSuccess('Payment method deleted successfully');
+      setShowDeletePaymentModal(false);
     } catch (error) {
-      setError(typeof error === 'string' ? error : 'Failed to remove payment method. Please try again.');
+      setError('Failed to delete payment method. Please try again.');
       console.error(error);
     } finally {
       setProcessingCard(false);
-      setSelectedPaymentMethod(null);
     }
   };
 
@@ -696,31 +650,29 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   
   // Subscription Tab Content
   const renderSubscriptionTab = () => {
+    // Get the freshest subscription data
+    const subscription = getActiveSubscription();
+    
+    // Show a loading indicator when fetching fresh data
+    if (loadingFreshData) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[300px]">
+          <div className="w-12 h-12 border-4 border-t-transparent border-tiktok-pink rounded-full animate-spin mb-4"></div>
+          <p className="text-gray-400">Refreshing subscription data...</p>
+        </div>
+      );
+    }
+    
     // Helper function to format dates
     const formatDate = (dateString) => {
       if (!dateString) return 'N/A';
       return new Date(dateString).toLocaleDateString();
     };
 
-    // If we have subscription usage data from the API, use it
-    // Otherwise, fall back to the data from the user object
-    const subscription = subscriptionUsage || user?.subscription || {
-      plan: 'Free Plan',
-      videosUsed: 0,
-      videosLimit: 10,
-      status: 'inactive',
-      isActive: false,
-      startDate: null,
-      renewDate: null
-    };
-
     // Get current plan details - ensure "Free Plan" is properly capitalized
-    const currentPlan = subscription.plan ? 
-      (subscription.plan.toLowerCase() === 'free' || subscription.plan.toLowerCase() === 'free plan' ? 
-        'Free Plan' : subscription.plan) : 
-      'Free Plan';
-      
-    const isFreePlan = currentPlan === 'Free Plan' || !subscription || subscription.plan?.toLowerCase() === 'free';
+    const planName = subscription.plan || 'free';
+    const currentPlan = planName.charAt(0).toUpperCase() + planName.slice(1).toLowerCase();
+    const isFreePlan = currentPlan.toLowerCase() === 'free';
     // Determine if subscription is actually active - check both isActive flag and cancelAtPeriodEnd
     const isSubscriptionActive = subscription.isActive && !subscription.cancelAtPeriodEnd && !subscription.isCanceled;
     const planPrice = subscription.price || (
@@ -777,24 +729,24 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     // Ensure videos limit is consistent
     // If subscription comes from API, it should use the API's value
     // If from user object, need to match dashboard's structure
-    const videosUsed = subscription.videosUsed || 0;
-    const videosLimit = isFreePlan ? 0 : (subscription.videosLimit || (
-      currentPlan.toLowerCase() === 'starter' ? 10 :
-      currentPlan.toLowerCase() === 'growth' ? 50 :
-      currentPlan.toLowerCase() === 'scale' ? 150 : 10
-    ));
+    const creditsUsed = subscription.creditsUsed || 0;
+    const creditsTotal = subscription.creditsTotal || 
+      (subscription.plan === 'starter' ? 10 : 
+       subscription.plan === 'growth' ? 50 : 
+       subscription.plan === 'scale' ? 150 : 
+       subscription.plan === 'free' ? 2 : 0);
     
     // Use storage data from subscription if available
     const storageUsed = subscription.storageUsed || user?.usage?.storage || 0;
     const storageLimit = subscription.storageLimit || user?.subscription?.limits?.storage || 1;
     
-    // Use videosRemaining from the API if available, otherwise calculate it
-    const videosRemaining = subscription.videosRemaining !== undefined
-      ? subscription.videosRemaining
-      : Math.max(0, videosLimit - videosUsed);
+    // Use creditsRemaining from the API if available, otherwise calculate it
+    const creditsRemaining = subscription.creditsRemaining !== undefined 
+      ? (subscription.creditsRemaining)
+      : Math.max(0, creditsTotal - creditsUsed);
     
     // Calculate usage percentage - avoid division by zero
-    const videoUsagePercent = videosLimit > 0 ? Math.min(100, (videosUsed / videosLimit) * 100) : 0;
+    const creditUsagePercent = creditsTotal > 0 ? Math.min(100, (creditsUsed / creditsTotal) * 100) : 0;
 
     // Plans definition - in a real app, these would come from an API
     const plans = [
@@ -852,6 +804,9 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       setProcessingCard(true);
       
       try {
+        // Get fresh subscription data first
+        await refreshSubscriptionData();
+        
         // Get selected plan
         const selectedPlan = plans.find(p => p.id === planId);
         if (!selectedPlan) {
@@ -882,69 +837,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         setError('Failed to process plan change. Please try again.');
         setProcessingCard(false);
         setShowPlanSelectionModal(false);
-      }
-    };
-
-    // Handle cancel subscription
-    const handleCancelSubscription = async () => {
-      setProcessingCard(true);
-      
-      try {
-        // Call API to cancel subscription
-        const response = await subscriptionService.cancelSubscription({
-          reason: cancelReason || 'No reason provided'
-        });
-        
-        if (response.success) {
-          // Update the user object
-          const updatedUser = { ...user };
-          if (updatedUser.subscription) {
-            updatedUser.subscription.cancelAtPeriodEnd = true;
-            updatedUser.subscription.isCanceled = true;
-            updatedUser.subscription.willCancelAt = response.cancelDate;
-          }
-          
-          // Update localStorage and state
-          localStorage.setItem('user', JSON.stringify(updatedUser));
-          setUser(updatedUser);
-          
-          setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
-          setShowCancelConfirmation(false);
-          
-          // Refresh subscription usage if available
-          if (typeof setSubscriptionUsage === 'function') {
-            try {
-              if (typeof loadingUsage === 'function') {
-                loadingUsage(true);
-              }
-              
-              const usageResponse = await subscriptionService.getSubscriptionUsage();
-              if (usageResponse && usageResponse.success) {
-                if (typeof setSubscriptionUsage === 'function') {
-                  // Update subscription usage state with cancellation flags
-                  setSubscriptionUsage({
-                    ...usageResponse.usage,
-                    cancelAtPeriodEnd: true,
-                    isCanceled: true
-                  });
-                }
-              }
-            } catch (usageError) {
-              console.error('Failed to refresh usage after cancellation:', usageError);
-            } finally {
-              if (typeof loadingUsage === 'function') {
-                loadingUsage(false);
-              }
-            }
-          }
-        } else {
-          setError(response.error || 'Failed to cancel subscription. Please try again.');
-        }
-      } catch (error) {
-        setError('Failed to cancel subscription. Please try again.');
-        console.error('Cancel subscription error:', error);
-      } finally {
-        setProcessingCard(false);
       }
     };
 
@@ -1221,7 +1113,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                   <IoVideocamOutline className="text-white text-xl" />
             </div>
                 <div>
-                  <p className="font-medium text-white">{videosLimit} videos</p>
+                  <p className="font-medium text-white">{creditsTotal} videos</p>
                   <p className="text-gray-400 text-sm">per month</p>
             </div>
               </div>
@@ -1848,7 +1740,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             ) : (
               <>
                 <IoTrashOutline className="mr-2" />
-                Delete My Account
+                Delete
               </>
             )}
           </button>
@@ -2124,28 +2016,23 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // Use the returned payment method
       const newPaymentMethod = response.paymentMethod;
       
-      // Update the user with the new payment method
-      const updatedUser = { ...user };
-      
-      // Initialize payment methods array if needed
-      if (!updatedUser.paymentMethods) {
-        updatedUser.paymentMethods = [];
-      }
-      
-      // Add the new payment method
-      updatedUser.paymentMethods.push(newPaymentMethod);
-      
-      // Set as default if it's the first one
-      if (!updatedUser.paymentMethod) {
-        updatedUser.paymentMethod = newPaymentMethod;
-      }
-      
       // Update the paymentMethods state
       setPaymentMethods(prevMethods => [...(prevMethods || []), newPaymentMethod]);
       
-      // Update localStorage and state
-      localStorage.setItem('user', JSON.stringify(updatedUser));
-      setUser(updatedUser);
+      // Update user state with the functional pattern
+      setUser(prevUser => {
+        // Create a copy of the payment methods or initialize if not exists
+        const updatedPaymentMethods = [...(prevUser.paymentMethods || []), newPaymentMethod];
+        
+        // Set as default if there are no other payment methods
+        const shouldBeDefault = !prevUser.paymentMethod;
+        
+        return {
+          ...prevUser,
+          paymentMethod: shouldBeDefault ? newPaymentMethod : prevUser.paymentMethod,
+          paymentMethods: updatedPaymentMethods
+        };
+      });
       
       setShowAddCardModal(false);
       setSuccess('Payment method added successfully!');
@@ -2237,28 +2124,23 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // Use the returned payment method with server-generated ID
       const newPaymentMethod = response.paymentMethod;
       
-      // Update the user with the new payment method
-      const updatedUser = { ...user };
-      
-      // Initialize payment methods array if needed
-      if (!updatedUser.paymentMethods) {
-        updatedUser.paymentMethods = [];
-      }
-      
-      // Add the new payment method
-      updatedUser.paymentMethods.push(newPaymentMethod);
-      
-      // Set as default if it's the first one
-      if (!updatedUser.paymentMethod) {
-        updatedUser.paymentMethod = newPaymentMethod;
-      }
-      
-      // Update the paymentMethods state
+      // Update the payment methods state
       setPaymentMethods(prevMethods => [...(prevMethods || []), newPaymentMethod]);
       
-      // Update localStorage and state
-      localStorage.setItem('user', JSON.stringify(updatedUser));
-      setUser(updatedUser);
+      // Update user state with the functional pattern
+      setUser(prevUser => {
+        // Create a copy of the payment methods or initialize if not exists
+        const updatedPaymentMethods = [...(prevUser.paymentMethods || []), newPaymentMethod];
+        
+        // Set as default if there are no other payment methods
+        const shouldBeDefault = !prevUser.paymentMethod;
+        
+        return {
+          ...prevUser,
+          paymentMethod: shouldBeDefault ? newPaymentMethod : prevUser.paymentMethod,
+          paymentMethods: updatedPaymentMethods
+        };
+      });
       
       setShowAddCardModal(false);
       setSuccess('PayPal account added successfully!');
@@ -2294,12 +2176,11 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         throw new Error('Payment method not found');
       }
       
-      // Update the user object
-      const updatedUser = { ...user };
-      updatedUser.paymentMethod = methodObj;
-      
-      // Update localStorage
-      localStorage.setItem('user', JSON.stringify(updatedUser));
+      // Update the user state with the functional pattern
+      setUser(prevUser => ({
+        ...prevUser,
+        paymentMethod: methodObj
+      }));
       
       // Update the paymentMethods state to mark this method as default
       // This ensures the UI updates immediately
@@ -2309,8 +2190,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         setPaymentMethods([...paymentMethods]);
       }
       
-      // Update state
-      setUser(updatedUser);
       setSuccess('Payment method set as default');
     } catch (error) {
       console.error('Error setting default payment method:', error);
@@ -2337,27 +2216,28 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // Call API to delete the payment method
       await deletePaymentMethod(methodId, user.token);
       
-      // Update the user object
-      const updatedUser = { ...user };
+      // Update the payment methods state directly
+      setPaymentMethods(prevMethods => {
+        if (!prevMethods) return [];
+        return prevMethods.filter(method => method.id !== methodId);
+      });
       
-      // If deleting the default payment method
-      if (updatedUser.paymentMethod && updatedUser.paymentMethod.id === methodId) {
-        delete updatedUser.paymentMethod;
-      }
-      
-      // Remove from the payment methods array
-      if (updatedUser.paymentMethods && Array.isArray(updatedUser.paymentMethods)) {
-        updatedUser.paymentMethods = updatedUser.paymentMethods.filter(
-          method => method.id !== methodId
-        );
+      // Update global user state
+      const updatedPaymentMethods = user.paymentMethods ? 
+        user.paymentMethods.filter(method => method.id !== methodId) : 
+        [];
         
-        // If we deleted the default and have other payment methods, set the first one as default
-        if (!updatedUser.paymentMethod && updatedUser.paymentMethods.length > 0) {
-          updatedUser.paymentMethod = updatedUser.paymentMethods[0];
+      // Handle default payment method if needed
+      let updatedDefaultPaymentMethod = user.paymentMethod;
+      if (updatedDefaultPaymentMethod && updatedDefaultPaymentMethod.id === methodId) {
+        updatedDefaultPaymentMethod = updatedPaymentMethods.length > 0 ? 
+          updatedPaymentMethods[0] : 
+          null;
           
-          // Also update the default in the database
+        // Also update the default in the database if we have a new default
+        if (updatedDefaultPaymentMethod) {
           try {
-            await setDefaultPaymentMethod(updatedUser.paymentMethod.id, user.token);
+            await setDefaultPaymentMethod(updatedDefaultPaymentMethod.id, user.token);
           } catch (error) {
             console.error('Error setting new default payment method:', error);
             // Continue anyway
@@ -2365,24 +2245,20 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         }
       }
       
-      // Update the paymentMethods state directly to reflect the change in UI immediately
-      setPaymentMethods(prevMethods => {
-        if (!prevMethods) return [];
-        return prevMethods.filter(method => method.id !== methodId);
-      });
-      
-      // Update localStorage and state
-      localStorage.setItem('user', JSON.stringify(updatedUser));
-      setUser(updatedUser);
+      // Update the user state
+      setUser(prevUser => ({
+        ...prevUser,
+        paymentMethod: updatedDefaultPaymentMethod,
+        paymentMethods: updatedPaymentMethods
+      }));
       
       // Close modal and show success
       setShowDeletePaymentModal(false);
       setSuccess('Payment method removed successfully');
     } catch (error) {
-      console.error('Error removing payment method:', error);
-      setError('Failed to remove payment method');
+      console.error('Error deleting payment method:', error);
+      setError('Failed to delete payment method');
     } finally {
-      setShowDeletePaymentModal(false);
       setProcessingCard(false);
     }
   };
@@ -2399,22 +2275,33 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   };
   
   // Handle cancel subscription confirmation
-  const confirmCancelSubscription = () => {
-    // In a real application, this would make an API call to cancel the subscription
-    // For now, just simulate success
+  const confirmCancelSubscription = async () => {
+    setProcessingCard(true);
     
-    // Update the user object
-    const updatedUser = { ...user };
-    if (updatedUser.subscription) {
-      updatedUser.subscription.cancelAtPeriodEnd = true;
+    try {
+      // First ensure we have the latest subscription data
+      await refreshSubscriptionData();
+      
+      // Call API to cancel subscription
+      const response = await subscriptionService.cancelSubscription({
+        reason: cancelReason || 'No reason provided'
+      });
+      
+      if (response.success) {
+        // Refresh subscription data to get the updated state
+        await refreshSubscriptionData();
+        
+        setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
+        setShowCancelConfirmation(false);
+      } else {
+        setError(response.error || 'Failed to cancel subscription. Please try again.');
+      }
+    } catch (error) {
+      setError('Failed to cancel subscription. Please try again.');
+      console.error('Cancel subscription error:', error);
+    } finally {
+      setProcessingCard(false);
     }
-    
-    // Update localStorage and state
-    localStorage.setItem('user', JSON.stringify(updatedUser));
-    setUser(updatedUser);
-    
-    setShowCancelConfirmation(false);
-    setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
   };
   
   // Generate receipt function
@@ -2988,46 +2875,19 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         });
         
         if (response.success) {
-          // Update the user object
-          const updatedUser = { ...user };
-          if (updatedUser.subscription) {
-            updatedUser.subscription.cancelAtPeriodEnd = true;
-            updatedUser.subscription.isCanceled = true;
-            updatedUser.subscription.willCancelAt = response.cancelDate;
-          }
+          // Refresh subscription data to get the updated state from backend
+          await refreshSubscriptionData();
           
-          // Update localStorage and state
-          localStorage.setItem('user', JSON.stringify(updatedUser));
-          setUser(updatedUser);
-          
-          setSuccess('Your subscription has been canceled. You will have access until the end of your current billing period.');
+          // Update UI with success message
+          setSuccess('Your subscription has been canceled successfully.');
           setShowCancelConfirmation(false);
           
-          // Refresh subscription usage if available
-          if (typeof setSubscriptionUsage === 'function') {
-            try {
-              if (typeof loadingUsage === 'function') {
-                loadingUsage(true);
-              }
-              
-              const usageResponse = await subscriptionService.getSubscriptionUsage();
-              if (usageResponse && usageResponse.success) {
-                if (typeof setSubscriptionUsage === 'function') {
-                  // Update subscription usage state with cancellation flags
-                  setSubscriptionUsage({
-                    ...usageResponse.usage,
-                    cancelAtPeriodEnd: true,
-                    isCanceled: true
-                  });
-                }
-              }
-            } catch (usageError) {
-              console.error('Failed to refresh usage after cancellation:', usageError);
-            } finally {
-              if (typeof loadingUsage === 'function') {
-                loadingUsage(false);
-              }
-            }
+          // Update user context directly from the response instead of localStorage
+          if (response.subscription) {
+            setUser(prevUser => ({
+              ...prevUser,
+              subscription: response.subscription
+            }));
           }
         } else {
           setError(response.error || 'Failed to cancel subscription. Please try again.');
@@ -3103,6 +2963,47 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         </div>
       </div>
     );
+  };
+  
+  // Use the freshest subscription data available
+  const getActiveSubscription = () => {
+    try {
+      // First check our refreshed subscription data
+      if (freshSubscription) {
+        return {
+          ...freshSubscription,
+          creditsUsed: subscriptionUsage?.creditsUsed || 0,
+          creditsTotal: subscriptionUsage?.creditsTotal || 10,
+          creditsRemaining: subscriptionUsage?.creditsRemaining || 
+            Math.max(0, (subscriptionUsage?.creditsTotal || 10) - (subscriptionUsage?.creditsUsed || 0)),
+          isActive: true
+        };
+      }
+      
+      // Fall back to user object subscription
+      if (user?.subscription) {
+        return {
+          ...user.subscription,
+          creditsUsed: subscriptionUsage?.creditsUsed || 0,
+          creditsTotal: subscriptionUsage?.creditsTotal || 10,
+          creditsRemaining: subscriptionUsage?.creditsRemaining || 
+            Math.max(0, (subscriptionUsage?.creditsTotal || 10) - (subscriptionUsage?.creditsUsed || 0)),
+          isActive: subscriptionUsage?.creditsTotal > 0
+        };
+      }
+      
+      // Default to an empty/free subscription
+      return {
+        plan: 'Free',
+        isActive: false,
+        creditsUsed: 0,
+        creditsTotal: 0,
+        creditsRemaining: 0
+      };
+    } catch (error) {
+      console.error('Error getting active subscription:', error);
+      return { plan: 'Free', isActive: false };
+    }
   };
   
   if (loading && !profileForm.name) {
@@ -3370,7 +3271,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         {activeTab === 'subscription' && (
           <div className="bg-tiktok-dark rounded-xl p-8">
             <div className="flex items-center mb-6">
-              <IoShieldOutline className="text-tiktok-pink text-3xl mr-4" />
+              <IoStarOutline className="text-tiktok-pink text-3xl mr-4" />
               <h2 className="text-xl font-bold">Subscription</h2>
             </div>
             

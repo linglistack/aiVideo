@@ -85,18 +85,16 @@ const Dashboard = ({ user, subscriptionUsage, loadingUsage }) => {
   // First try localSubscription (direct API data), then subscriptionUsage (props),
   // then user?.subscription (from localStorage via props), then fallback defaults
   const subscription = localSubscription || subscriptionUsage || user?.subscription || {
-    videosUsed: 0,
-    videosLimit: 10,
+    creditsUsed: 0,
+    creditsTotal: 10,
     plan: 'free',
     endDate: null
   };
   
-  // Use the videosRemaining from the most reliable source
-  const videosRemaining = localSubscription 
-    ? (localSubscription.videosLimit - localSubscription.videosUsed)
-    : subscriptionUsage 
-      ? subscriptionUsage.videosRemaining 
-      : Math.max(0, subscription.videosLimit - subscription.videosUsed);
+  // Calculate videos remaining if not provided
+  const creditsUsed = subscription.creditsUsed || 0;
+  const creditsTotal = subscription.creditsTotal || 0;
+  const creditsRemaining = subscription.creditsRemaining || Math.max(0, creditsTotal - creditsUsed);
   
   // Use the daysUntilReset from the most reliable source
   const daysRemaining = localSubscription
@@ -145,18 +143,18 @@ const Dashboard = ({ user, subscriptionUsage, loadingUsage }) => {
                   <p className="text-gray-400 text-sm">Monthly Videos</p>
                   <div className="flex items-center justify-center mt-2">
                     <span className="text-3xl font-bold mr-2">
-                      {subscription.videosUsed || 0}
+                      {creditsUsed || 0}
                     </span>
-                    <span className="text-gray-400">/ {subscription.videosLimit || 0}</span>
+                    <span className="text-gray-400">/ {creditsTotal || 0}</span>
                   </div>
                   <div className="w-full bg-gray-700 rounded-full h-2 mt-3">
                     <div 
                       className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink h-2 rounded-full" 
-                      style={{ width: `${subscription.videosLimit ? (subscription.videosUsed / subscription.videosLimit) * 100 : 0}%` }}
+                      style={{ width: `${creditsTotal ? (creditsUsed / creditsTotal) * 100 : 0}%` }}
                     ></div>
                   </div>
                   <p className="text-gray-400 text-xs mt-2">
-                    <span className="text-tiktok-pink font-semibold">{videosRemaining}</span> videos remaining this month
+                    <span className="text-tiktok-pink font-semibold">{creditsRemaining}</span> videos remaining this month
                   </p>
                 </div>
                 

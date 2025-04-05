@@ -81,11 +81,11 @@ const aiUserSchema = new mongoose.Schema({
     },
     creditsTotal: {
       type: Number,
-      default: 0
+      default: 5
     },
     isActive: {
       type: Boolean,
-      default: false
+      default: true
     },
     billingCycle: {
       type: String,

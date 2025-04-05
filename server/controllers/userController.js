@@ -53,7 +53,7 @@ const registerUser = async (req, res) => {
       subscription: {
         plan: 'free',
         startDate: Date.now(),
-        videosLimit: 2
+        creditsTotal: 2
       }
     });
 
@@ -200,7 +200,7 @@ const googleAuthUser = async (req, res) => {
         subscription: {
           plan: 'free',
           startDate: Date.now(),
-          videosLimit: 2
+          creditsTotal: 2
         }
       });
     } else if (!user.googleId) {

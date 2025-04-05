@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   IoHomeOutline, 
@@ -59,7 +59,7 @@ const Sidebar = ({ user, onLogout }) => {
   // Use the most up-to-date user data
   const currentUser = refreshedUser || user;
   
-  // Fetch subscription usage data when component mounts or route changes
+  // Fetch subscription usage data when component mounts or user changes
   useEffect(() => {
     const fetchSubscriptionUsage = async () => {
       try {
@@ -73,7 +73,6 @@ const Sidebar = ({ user, onLogout }) => {
         }
         
         const response = await getSubscriptionUsage();
-        console.log('ssss', response, currentUser)
         if (response.success) {
           setSubscriptionUsage(response.usage);
         } else {
@@ -96,7 +95,38 @@ const Sidebar = ({ user, onLogout }) => {
     } else {
       setLoadingUsage(false);
     }
-  }, [currentUser, location.pathname]);
+  }, [currentUser]);
+  
+  // Add a manual refresh function that can be called when needed
+  const refreshSubscriptionUsage = useCallback(async () => {
+    // Only refresh if there's a user
+    if (!currentUser || !currentUser.token) return;
+    
+    try {
+      const response = await getSubscriptionUsage();
+      if (response.success) {
+        setSubscriptionUsage(response.usage);
+      }
+    } catch (error) {
+      console.error('Error manually refreshing subscription data:', error);
+    }
+  }, [currentUser]);
+  
+  // Add a listener for custom events that might trigger a refresh
+  useEffect(() => {
+    // Listen for events that should trigger a refresh
+    const handleVideoCreated = () => {
+      refreshSubscriptionUsage();
+    };
+    
+    // Add event listener
+    window.addEventListener('video-created', handleVideoCreated);
+    
+    // Clean up
+    return () => {
+      window.removeEventListener('video-created', handleVideoCreated);
+    };
+  }, [refreshSubscriptionUsage]);
   
   // Generate CSS classes for menu items
   const getMenuItemClasses = (path) => {
@@ -125,21 +155,27 @@ const Sidebar = ({ user, onLogout }) => {
     setProfileDropdownOpen(!profileDropdownOpen);
   };
   
-  // Calculate video usage metrics
-  const videosRemaining = (currentUser.subscription?.videosLimit - currentUser.subscription?.videosUsed) || 5;
-    
+  // Use the data we have with fallbacks
+  const subscription = user?.subscription || {};
+  const creditsUsed = subscription.creditsUsed || 0;
+  const creditsTotal = subscription.creditsTotal || 0;
+  const creditsRemaining = subscription.creditsRemaining !== undefined 
+    ? subscription.creditsRemaining
+    : Math.max(0, creditsTotal - creditsUsed);
+  
+  const plan = user?.subscription?.plan || user?.plan || 'Free';
+  
+  // Calculate remaining days
   const daysRemaining = subscriptionUsage 
     ? subscriptionUsage.daysUntilReset 
     : currentUser.subscription?.endDate 
       ? Math.ceil((new Date(currentUser.subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)) 
       : 30;
       
-  // Calculate the percentage of videos used
-  const usagePercentage = subscriptionUsage 
-    ? ((subscriptionUsage.videosUsed || 0) / (subscriptionUsage.videosLimit || 1)) * 100 
-    : currentUser.subscription?.videosLimit 
-      ? ((currentUser.subscription?.videosUsed || 0) / currentUser.subscription.videosLimit) * 100 
-      : 50;
+  // Calculate the percentage of credits used
+  const usagePercentage = creditsTotal 
+    ? Math.min(100, (creditsUsed / creditsTotal) * 100)
+    : 0;
   
   return (
     <div className="w-64 bg-tiktok-dark h-screen fixed left-0 top-0 pt-6 border-r border-gray-800 overflow-y-auto flex flex-col">
@@ -217,7 +253,7 @@ const Sidebar = ({ user, onLogout }) => {
             </div>
           ) : (
             <div className="text-gray-300 text-sm">
-              <p className="font-medium">{videosRemaining} videos remaining</p>
+              <p className="font-medium">{creditsRemaining} videos remaining</p>
               <p className="text-xs mt-1 text-gray-400">
                 Resets in {daysRemaining} day{daysRemaining !== 1 ? 's' : ''}
               </p>

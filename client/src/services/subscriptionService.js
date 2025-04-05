@@ -58,30 +58,18 @@ const getSubscriptionStatus = async () => {
   } catch (error) {
     console.error('Error getting subscription status:', error.response?.data || error.message);
     
-    // If we get 401 unauthorized, return a default starter plan
+    // Handle specific error cases
     if (error.response?.status === 401) {
-      console.log('Providing default free plan due to auth error');
       return {
-        success: true,
-        subscription: {
-          plan: 'free',
-          isActive: false,
-          videosUsed: 0,
-          videosLimit: 5,
-          startDate: new Date(),
-          endDate: new Date(new Date().setMonth(new Date().getMonth() + 1)),
-          isCanceled: false,
-          cancelAtPeriodEnd: false,
-          planDetails: {
-            name: 'Free',
-            monthlyPrice: 0,
-            yearlyPrice: 0
-          }
-        }
+        success: false,
+        error: 'Your session has expired. Please log in again.'
       };
     }
     
-    throw error.response?.data || { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Failed to fetch subscription status'
+    };
   }
 };
 
@@ -225,37 +213,7 @@ const cancelSubscription = async (data = {}) => {
       data: data // Send data in the request body for DELETE
     });
     
-    // If successful, update the local user data to reflect cancellation
-    if (response.data.success) {
-      try {
-        const currentUser = JSON.parse(localStorage.getItem('user'));
-        if (currentUser && currentUser.subscription) {
-          // Apply cancellation state but keep access until period end
-          // The key point is to keep isActive true but mark as canceled
-          const updatedSubscription = {
-            ...currentUser.subscription,
-            isActive: true, // Keep active until end of period
-            cancelAtPeriodEnd: true,
-            isCanceled: true,
-            canceledAt: new Date().toISOString(),
-          };
-          
-          // If the server returned subscription data, merge it
-          if (response.data.subscription) {
-            Object.assign(updatedSubscription, response.data.subscription);
-          }
-          
-          // Apply updates to user object
-          currentUser.subscription = updatedSubscription;
-          
-          localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Updated local user data with subscription cancellation:', updatedSubscription);
-        }
-      } catch (localStorageError) {
-        console.error('Error updating local storage after cancellation:', localStorageError);
-      }
-    }
-    
+    // Return the response directly from the server
     return response.data;
   } catch (error) {
     console.error('Error canceling subscription:', error);
@@ -271,46 +229,6 @@ const cancelSubscription = async (data = {}) => {
     return {
       success: false,
       error: error.response?.data?.error || error.message || 'Failed to cancel subscription'
-    };
-  }
-};
-
-// Refresh subscription data after changes
-const refreshSubscriptionData = async () => {
-  try {
-    const user = getCurrentUser();
-    
-    if (!user || !user.token) {
-      console.error('refreshSubscriptionData: No valid user token found');
-      return {
-        success: false,
-        error: 'Authentication required. Please log in again.'
-      };
-    }
-    
-    // Get fresh subscription data
-    const response = await getSubscriptionStatus();
-    
-    // Update local storage with new subscription data
-    if (response.success && response.subscription) {
-      try {
-        const currentUser = JSON.parse(localStorage.getItem('user'));
-        if (currentUser) {
-          currentUser.subscription = response.subscription;
-          localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Updated local user data with refreshed subscription');
-        }
-      } catch (localStorageError) {
-        console.error('Error updating local storage with refreshed subscription:', localStorageError);
-      }
-    }
-    
-    return response;
-  } catch (error) {
-    console.error('Error refreshing subscription data:', error);
-    return {
-      success: false,
-      error: error.response?.data?.error || error.message || 'Failed to refresh subscription data'
     };
   }
 };
@@ -363,19 +281,9 @@ const getSubscriptionUsage = async () => {
     const user = getCurrentUser();
     
     if (!user || !user.token) {
-      console.log('getSubscriptionUsage: No authenticated user found, returning default data');
       return {
-        success: true,
-        usage: {
-          videosUsed: 0,
-          videosLimit: 10,
-          videosRemaining: 10,
-          plan: 'free',
-          isActive: false,
-          endDate: null,
-          daysUntilReset: 30,
-          billingCycle: 'none'
-        }
+        success: false,
+        error: 'Authentication required. Please log in again.'
       };
     }
     
@@ -391,25 +299,18 @@ const getSubscriptionUsage = async () => {
   } catch (error) {
     console.error('Error getting subscription usage:', error.response?.data || error.message);
     
-    // If we get 401 unauthorized, return a default object
+    // Handle specific error cases
     if (error.response?.status === 401) {
-      console.log('Providing default usage data due to auth error');
       return {
-        success: true,
-        usage: {
-          videosUsed: 0,
-          videosLimit: 10,
-          videosRemaining: 10,
-          plan: 'free',
-          isActive: false,
-          endDate: null,
-          daysUntilReset: 30,
-          billingCycle: 'none'
-        }
+        success: false,
+        error: 'Your session has expired. Please log in again.'
       };
     }
     
-    throw error.response?.data || { success: false, error: error.message };
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Failed to fetch subscription usage'
+    };
   }
 };
 
@@ -636,6 +537,11 @@ const syncPaymentMethods = async () => {
       error: error.response?.data?.error || error.message || 'Failed to sync payment methods'
     };
   }
+};
+
+// Refresh subscription data after changes
+const refreshSubscriptionData = async () => {
+  return await getSubscriptionStatus();
 };
 
 export {

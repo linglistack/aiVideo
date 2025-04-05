@@ -116,8 +116,8 @@ const PaymentSuccess = () => {
             </div>
             
             <div className="flex justify-between">
-              <span className="text-gray-400">Videos Limit</span>
-              <span className="font-medium">{subscription?.videosLimit} videos</span>
+              <span className="text-gray-400">Credits</span>
+              <span className="font-medium">{subscription?.creditsTotal} credits</span>
             </div>
             
             <div className="flex justify-between">

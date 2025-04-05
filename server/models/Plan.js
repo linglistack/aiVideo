@@ -29,16 +29,18 @@ const planSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
-  videosCredits: {
+  creditsTotal: {
     type: Number,
-    required: true // Number of video credits allocated per 30-day cycle
+    required: true // Number of credits allocated per 30-day cycle
   },
   active: {
     type: Boolean,
     default: true
   }
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { getters: true }, // Include virtuals and getters when converting to JSON
+  toObject: { getters: true } // Include virtuals and getters when converting to object
 });
 
 const Plan = mongoose.model('Plan', planSchema);

@@ -20,7 +20,6 @@ import { getCurrentUser, logout, getProfile } from './services/authService';
 import Pricing from './components/Pricing/Pricing';
 import PaymentForm from './components/PaymentForm/PaymentForm';
 import PaymentSuccess from './components/PaymentSuccess/PaymentSuccess';
-import ManageSubscription from './components/ManageSubscription/ManageSubscription';
 import Account from './components/Account/Account';
 import ApiUrlInfo from './components/ApiUrlInfo';
 
@@ -366,7 +365,6 @@ const AppContent = ({ user, setUser, handleLogout }) => {
           } />
           <Route path="/payment-success" element={user ? <PaymentSuccess /> : <Navigate to="/login" />} />
           <Route path="/account" element={user ? <AccountWithUsage user={user} setUser={setUser} /> : <Navigate to="/login" />} />
-          <Route path="/account/subscription" element={user ? <ManageSubscription /> : <Navigate to="/login" />} />
           <Route path="/account/billing" element={
             user ? <BillingPortalRedirect /> : <Navigate to="/login" />
           } />
