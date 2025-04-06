@@ -464,54 +464,98 @@ const ScriptToScenes = () => {
 
   // Function to create video from scene images
   const createVideo = async () => {
-    if (sceneImages.length === 0) return;
+    if (!sceneImages || sceneImages.length === 0) {
+      setError('No scene images to create video from');
+      return;
+    }
+    
+    console.log(`Starting video creation with ${sceneImages.length} scenes...`);
+    setIsCreatingVideo(true);
+    setError('');
     
     try {
-      setIsCreatingVideo(true);
-      setError('');
+      console.log('Preparing scene data for API request...');
       
-      // Prepare images for video creation (with or without text overlays based on current settings)
-      const processedScenes = await Promise.all(
-        sceneImages.map(async (scene, index) => {
-          // Determine if we need to add text overlay for this specific scene
-          const shouldAddOverlay = showOverlays[index];
-          
-          let imageUrl = scene.imageUrl;
-          
-          // Apply text overlay if needed
-          if (shouldAddOverlay) {
-            imageUrl = await renderTextOverlay(imageUrl, scene.description, index);
-          }
-          
-          return {
-            imageUrl: imageUrl,
-            description: scene.description
-          };
-        })
-      );
+      // Debug: Check image URLs format
+      const imageUrlTypes = sceneImages.map((scene, index) => ({
+        index,
+        urlType: scene.imageUrl.startsWith('data:') ? 'data-url' : 'remote-url',
+        urlLength: scene.imageUrl.length,
+        descriptionLength: scene.description.length
+      }));
+      console.log('Scene image URL types:', imageUrlTypes);
       
-      // Send images to server for video creation
+      console.log('Sending request to create video from scenes to:', `${config.videos}/create-video-from-scenes`);
+      
       const response = await axios.post(
         `${config.videos}/create-video-from-scenes`,
-        { scenes: processedScenes },
+        { scenes: sceneImages },
         authHeader()
       );
       
+      console.log('Server response:', response.data);
+      
       if (response.data.success) {
         setVideoUrl(response.data.videoUrl);
-        
-        // Scroll to the video when it's ready
+        // Scroll to the video section
         setTimeout(() => {
           if (videoRef.current) {
             videoRef.current.scrollIntoView({ behavior: 'smooth' });
           }
         }, 500);
       } else {
-        setError(response.data.error || 'Failed to create video');
+        const errorMsg = response.data.error || 'Failed to create video';
+        console.error('Error from server:', errorMsg);
+        
+        // Handle specific errors more gracefully
+        let userFriendlyError = errorMsg;
+        if (errorMsg.includes('Invalid transformation component') || errorMsg.includes('Cloudinary')) {
+          userFriendlyError = 'There was an issue creating your video. Please try again with fewer scenes or different images.';
+        }
+        
+        setError(userFriendlyError);
       }
     } catch (error) {
       console.error('Error creating video:', error);
-      setError(error.response?.data?.error || 'An unexpected error occurred');
+      
+      // Extract error message from the response if possible
+      let errorMsg = 'Failed to create video';
+      
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        console.error('Server error status:', error.response.status);
+        console.error('Server error headers:', error.response.headers);
+        console.error('Server error data:', error.response.data);
+        
+        if (error.response.data) {
+          if (typeof error.response.data === 'string') {
+            errorMsg = error.response.data;
+          } else if (error.response.data.error) {
+            errorMsg = error.response.data.error;
+          }
+        }
+      } else if (error.request) {
+        // The request was made but no response was received
+        console.error('No response received:', error.request);
+        errorMsg = 'No response from server. Please check your network connection.';
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        console.error('Request setup error:', error.message);
+        errorMsg = error.message;
+      }
+      
+      // Provide more user-friendly error message for common issues
+      if (errorMsg.includes('timeout') || errorMsg.includes('ECONNABORTED')) {
+        errorMsg = 'Request timed out. The video may take longer to create than expected. Please try with fewer images.';
+      } else if (errorMsg.includes('Invalid transformation component') || errorMsg.includes('Cloudinary')) {
+        errorMsg = 'There was an issue with our video service. Please try again with fewer scenes or different images.';
+      } else if (errorMsg.includes('Network Error') || errorMsg.includes('CORS')) {
+        errorMsg = 'Network error or CORS issue. Please check console for details. Try again later or with fewer scenes.';
+        console.log('This might be a CORS or network issue. Check if backend URL is correctly set to:', config.videos);
+      }
+      
+      setError(errorMsg);
     } finally {
       setIsCreatingVideo(false);
     }

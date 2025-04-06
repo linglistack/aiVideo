@@ -17,7 +17,7 @@ const app = express();
 app.use(cors({
   origin: function(origin, callback) {
     const allowedOrigins = process.env.NODE_ENV === 'production' 
-      ? ['https://ai-video-client.vercel.app', 'https://aivideo.vercel.app', process.env.CLIENT_URL].filter(Boolean)
+      ? ['https://ai-video-client.vercel.app', 'https://aivideo.vercel.app', 'https://aivideo-client.vercel.app', 'https://aivideo-server.onrender.com', process.env.CLIENT_URL].filter(Boolean)
       : ['http://localhost:3000'];
     
     // Allow requests with no origin (like mobile apps, curl requests, etc)
@@ -27,21 +27,23 @@ app.use(cors({
       callback(null, true);
     } else {
       console.log('CORS blocked request from:', origin);
-      // Still allow the request to go through to avoid breaking functionality
+      // In production, be more permissive for debugging
       callback(null, true);
     }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin']
 }));
 
 // Handle OPTIONS preflight requests
 app.options('*', (req, res) => {
   // Add the CORS headers manually to ensure they are applied
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.header('Origin');
+  res.header('Access-Control-Allow-Origin', origin || '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin');
+  res.header('Access-Control-Allow-Credentials', 'true');
   res.status(200).send();
 });
 
@@ -101,6 +103,12 @@ app.use('/api', ensureDbConnected);
 // Apply visitor logging after DB connection is ensured 
 // (but before routes, so we log all requests)
 app.use(logVisitor);
+
+// Add debug logging for all requests
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - Origin: ${req.header('Origin') || 'none'}`);
+  next();
+});
 
 // Apply routes
 app.use('/api/auth', authRoutes);

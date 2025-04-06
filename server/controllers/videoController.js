@@ -893,6 +893,15 @@ const createVideoFromScenes = async (req, res) => {
       });
     }
     
+    // Add memory debugging logs
+    const initialMemory = process.memoryUsage();
+    console.log('Memory usage before processing:', {
+      rss: `${Math.round(initialMemory.rss / 1024 / 1024)} MB`,
+      heapTotal: `${Math.round(initialMemory.heapTotal / 1024 / 1024)} MB`, 
+      heapUsed: `${Math.round(initialMemory.heapUsed / 1024 / 1024)} MB`
+    });
+    console.log(`Processing ${scenes.length} scenes...`);
+    
     // Create unique ID for this video
     const videoId = uuidv4();
     const tempDir = path.join(os.tmpdir(), 'aivideo_tmp', videoId);
@@ -932,16 +941,16 @@ const createVideoFromScenes = async (req, res) => {
         
         // Process image to ensure consistent dimensions
         if (sharp) {
-          // Process with sharp to ensure consistent dimensions (1280x720)
+          // Process with sharp to reduce dimensions and save memory (640x360)
           await sharp(imageBuffer)
             .resize({
-              width: 1280,
-              height: 720,
+              width: 640,  // Reduced resolution for memory efficiency
+              height: 360, // Reduced resolution for memory efficiency
               fit: 'contain',
               background: { r: 0, g: 0, b: 0, alpha: 1 }
             })
             .toFile(frameFile);
-          console.log(`Processed frame ${i} with sharp for consistent dimensions`);
+          console.log(`Processed frame ${i} with sharp for consistent dimensions (640x360)`);
         } else {
           // Fallback to direct file write if sharp is not available
           await fs.writeFile(frameFile, imageBuffer);
@@ -955,6 +964,14 @@ const createVideoFromScenes = async (req, res) => {
     
     console.log(`Processed and saved ${frameFiles.length} frames with consistent dimensions`);
     
+    // Log memory after processing images
+    const afterImagesMemory = process.memoryUsage();
+    console.log('Memory usage after processing images:', {
+      rss: `${Math.round(afterImagesMemory.rss / 1024 / 1024)} MB`,
+      heapTotal: `${Math.round(afterImagesMemory.heapTotal / 1024 / 1024)} MB`, 
+      heapUsed: `${Math.round(afterImagesMemory.heapUsed / 1024 / 1024)} MB`
+    });
+    
     // Create a simpler version of the video using FFmpeg
     // Use simpler FFmpeg approach - just show each image for 3 seconds
     const outputVideoPath = path.join(tempDir, 'output.mp4');
@@ -965,9 +982,9 @@ const createVideoFromScenes = async (req, res) => {
       const framesList = await fs.readdir(framesDir);
       console.log(framesList);
       
-      // Use a more robust FFmpeg command with scale filter to ensure consistent dimensions
-      // Force 1280x720, maintain aspect ratio, pad with black, and ensure 3 seconds per image
-      const ffmpegCmd = `ffmpeg -y -f image2 -framerate 1/3 -i "${framesDir}/frame_%03d.png" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1" -c:v libx264 -preset medium -profile:v high -crf 23 -pix_fmt yuv420p -r 30 "${outputVideoPath}"`;
+      // Use a memory-optimized FFmpeg command for Render hosting
+      // Lower resolution, ultrafast preset, and minimal memory usage
+      const ffmpegCmd = `ffmpeg -y -f image2 -framerate 1/3 -i "${framesDir}/frame_%03d.png" -vf "scale=640:360:force_original_aspect_ratio=decrease,pad=640:360:(ow-iw)/2:(oh-ih)/2,setsar=1" -c:v libx264 -preset ultrafast -tune fastdecode -crf 28 -pix_fmt yuv420p -r 15 "${outputVideoPath}"`;
       
       console.log(`Running FFmpeg command: ${ffmpegCmd}`);
       
@@ -990,8 +1007,8 @@ const createVideoFromScenes = async (req, res) => {
       try {
         console.log('Trying fallback FFmpeg approach');
         
-        // Create a simpler fallback command but still enforce proper dimensions
-        const fallbackCmd = `ffmpeg -y -f image2 -i "${framesDir}/frame_%03d.png" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=1/3" -c:v libx264 -preset fast -pix_fmt yuv420p "${outputVideoPath}"`;
+        // Create an even more memory-efficient fallback command
+        const fallbackCmd = `ffmpeg -y -f image2 -i "${framesDir}/frame_%03d.png" -vf "scale=480:270:force_original_aspect_ratio=decrease,pad=480:270:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=1/3" -c:v libx264 -preset ultrafast -crf 30 -tune zerolatency -pix_fmt yuv420p "${outputVideoPath}"`;
         console.log(`Running fallback FFmpeg command: ${fallbackCmd}`);
         
         const { stdout, stderr } = await execPromise(fallbackCmd);
@@ -1008,6 +1025,14 @@ const createVideoFromScenes = async (req, res) => {
         throw new Error(`Failed to create video with FFmpeg: ${fallbackError.message}`);
       }
     }
+    
+    // Log memory before Cloudinary upload
+    const preUploadMemory = process.memoryUsage();
+    console.log('Memory usage before Cloudinary upload:', {
+      rss: `${Math.round(preUploadMemory.rss / 1024 / 1024)} MB`,
+      heapTotal: `${Math.round(preUploadMemory.heapTotal / 1024 / 1024)} MB`, 
+      heapUsed: `${Math.round(preUploadMemory.heapUsed / 1024 / 1024)} MB`
+    });
     
     // Upload to Cloudinary
     try {
@@ -1048,6 +1073,14 @@ const createVideoFromScenes = async (req, res) => {
       // Update user's credit usage (1 credit for video creation)
       await User.findByIdAndUpdate(req.user._id, {
         $inc: { 'subscription.creditsUsed': 1 }
+      });
+      
+      // Final memory usage
+      const finalMemory = process.memoryUsage();
+      console.log('Final memory usage:', {
+        rss: `${Math.round(finalMemory.rss / 1024 / 1024)} MB`,
+        heapTotal: `${Math.round(finalMemory.heapTotal / 1024 / 1024)} MB`, 
+        heapUsed: `${Math.round(finalMemory.heapUsed / 1024 / 1024)} MB`
       });
       
       // Clean up temp files after successful upload
