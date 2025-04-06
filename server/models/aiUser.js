@@ -105,6 +105,10 @@ const aiUserSchema = new mongoose.Schema({
       }
     }
   },
+  lastVisitedTime: {
+    type: Date,
+    default: null
+  },
   createdAt: {
     type: Date,
     default: Date.now

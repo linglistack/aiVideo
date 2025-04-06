@@ -14,7 +14,8 @@ import {
   IoLogOutOutline,
   IoChevronDownOutline,
   IoChevronUpOutline,
-  IoPersonOutline
+  IoPersonOutline,
+  IoDiamondOutline
 } from 'react-icons/io5';
 import { getSubscriptionUsage } from '../../services/subscriptionService';
 import { getProfile } from '../../services/authService';
@@ -208,11 +209,18 @@ const Sidebar = ({ user, onLogout }) => {
             <span>Videos</span>
           </Link> */}
           
+          {user.role === 'admin' && <Link to="/admin" className={getMenuItemClasses("/create")}>
+            <IoDiamondOutline className="text-xl" />
+            <span>Admin</span>
+          </Link>}
+          
           <Link to="/transform" className={getMenuItemClasses("/transform")}>
             <IoRocketOutline className="text-xl" />
             <span>Transform</span>
           </Link>
           
+           
+
           {/* <Link to="/campaigns" className={getMenuItemClasses("/campaigns")}>
             <IoRocketOutline className="text-xl" />
             <span>Campaigns</span>

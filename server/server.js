@@ -3,8 +3,10 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 const path = require('path');
+const cookieParser = require('cookie-parser');
 const { initSubscriptionScheduler } = require('./services/subscriptionScheduler');
 const mongoose = require('mongoose');
+const { logVisitor } = require('./middleware/visitorLogMiddleware');
 
 dotenv.config();
 
@@ -43,6 +45,9 @@ app.options('*', (req, res) => {
   res.status(200).send();
 });
 
+// Parse cookies
+app.use(cookieParser());
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -57,6 +62,7 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes');
 const videoRoutes = require('./routes/videoRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const contactRoutes = require('./routes/contactRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 // Special endpoint to ensure DB connection is established
 app.get('/api/connect', async (req, res) => {
@@ -92,12 +98,17 @@ const ensureDbConnected = async (req, res, next) => {
 // Apply DB connection middleware to all API routes
 app.use('/api', ensureDbConnected);
 
+// Apply visitor logging after DB connection is ensured 
+// (but before routes, so we log all requests)
+app.use(logVisitor);
+
 // Apply routes
 app.use('/api/auth', authRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Special route for Stripe webhooks (needs raw body)
 app.post('/api/subscriptions/webhook', 

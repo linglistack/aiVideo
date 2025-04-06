@@ -15,11 +15,13 @@
     "axios": "^1.8.4",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.6.0",
+    "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "dashscope": "^1.0.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "form-data": "^4.0.2",
+    "geoip-lite": "^1.4.10",
     "google-auth-library": "^9.15.1",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.13.0",
@@ -28,6 +30,7 @@
     "nodemailer": "^6.9.13",
     "sharp": "^0.33.5",
     "stripe": "^17.7.0",
+    "ua-parser-js": "^1.0.38",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

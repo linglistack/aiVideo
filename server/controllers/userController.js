@@ -5,6 +5,14 @@ const { OAuth2Client } = require('google-auth-library');
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// Helper to get current EST time
+const getCurrentESTTime = () => {
+  // Create a new date object in the Eastern Time Zone
+  const options = { timeZone: 'America/New_York' };
+  const newYorkTime = new Date().toLocaleString('en-US', options);
+  return new Date(newYorkTime);
+};
+
 // Generate JWT
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -25,6 +33,7 @@ const formatUserResponse = (user) => {
     paymentMethod: user.paymentMethod || null,
     hasPassword: Boolean(user.password),
     token: user.token || generateToken(user._id),
+    lastVisitedTime: user.lastVisitedTime
   };
 };
 
@@ -127,6 +136,10 @@ const loginUser = async (req, res) => {
       });
     }
     
+    // Update last visited time
+    user.lastVisitedTime = getCurrentESTTime();
+    await user.save();
+    
     // Add token to user object for formatter function
     user.token = generateToken(user._id);
     
@@ -201,14 +214,20 @@ const googleAuthUser = async (req, res) => {
           plan: 'free',
           startDate: Date.now(),
           creditsTotal: 2
-        }
+        },
+        lastVisitedTime: getCurrentESTTime()
       });
-    } else if (!user.googleId) {
-      // If user exists but doesn't have Google ID, update it
-      user.googleId = sub;
-      if (!user.avatar && picture) {
-        user.avatar = picture;
+    } else {
+      // If user exists, update Google ID if needed and set lastVisitedTime
+      if (!user.googleId) {
+        user.googleId = sub;
+        if (!user.avatar && picture) {
+          user.avatar = picture;
+        }
       }
+      
+      // Update last visited time
+      user.lastVisitedTime = getCurrentESTTime();
       await user.save();
     }
     

@@ -23,6 +23,7 @@ import PaymentForm from './components/PaymentForm/PaymentForm';
 import PaymentSuccess from './components/PaymentSuccess/PaymentSuccess';
 import Account from './components/Account/Account';
 import ApiUrlInfo from './components/ApiUrlInfo';
+import AdminDashboard from './components/Admin/AdminDashboard';
 
 // Load Stripe outside of component render to avoid recreating Stripe object
 const stripePromise = loadStripe(process.env.REACT_APP_STRIPE_PUBLIC_KEY);
@@ -378,6 +379,9 @@ const AppContent = ({ user, setUser, handleLogout }) => {
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/help" element={<Help />} />
           <Route path="/contact" element={<Contact />} />
+          <Route path="/admin" element={
+            user && user.role === 'admin' ? <AdminDashboard user={user} /> : <Navigate to="/dashboard" />
+          } />
         </Routes>
       </div>
     </div>

@@ -48,6 +48,11 @@ const ScriptToScenes = () => {
         if (currentIndex < textLength) {
           setTypedText(fullExpandedText.substring(0, currentIndex + 1));
           currentIndex++;
+          
+          // Auto-scroll textarea to bottom as new text appears
+          if (textareaRef.current) {
+            textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
+          }
         } else {
           clearInterval(typingInterval);
           setIsTyping(false);
@@ -63,6 +68,9 @@ const ScriptToScenes = () => {
   useEffect(() => {
     if (isTyping && textareaRef.current) {
       textareaRef.current.focus();
+      
+      // Initial scroll to bottom to ensure visibility when typing starts
+      textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
     }
   }, [isTyping]);
 
@@ -107,6 +115,11 @@ const ScriptToScenes = () => {
     try {
       setIsGeneratingScript(true);
       setError('');
+      
+      // Ensure textarea is visible when expansion starts
+      if (textareaRef.current) {
+        textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
 
       const response = await axios.post(
         `${config.videos}/expand-script`,
