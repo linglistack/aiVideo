@@ -305,23 +305,9 @@ The image should be indistinguishable from a real photograph you'd find in a mag
                     if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
                         console.log(`Successfully generated inline image ${index + 1}!`);
                         
-                        // Create temporary directory if it doesn't exist
-                        const tmpDir = path.join(process.cwd(), 'tmp');
-                        await fs.mkdir(tmpDir, { recursive: true });
-                        
-                        // Save image to temporary file
-                        const imageFileName = `gemini_${Date.now()}_${index}.png`;
-                        const imagePath = path.join(tmpDir, imageFileName);
-                        await fs.writeFile(imagePath, Buffer.from(part.inlineData.data, 'base64'));
-                        
-                        // Upload to Cloudinary
-                        const uploadResult = await cloudinary.uploader.upload(imagePath);
-                        
-                        // Delete temporary file
-                        await fs.unlink(imagePath);
-                        
-                        console.log(`Image ${index + 1} uploaded to Cloudinary: ${uploadResult.secure_url}`);
-                        return uploadResult.secure_url;
+                        // Return base64 data URL directly instead of uploading to Cloudinary
+                        const dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                        return dataUrl;
                     }
                 }
                 
@@ -368,41 +354,6 @@ The image should be indistinguishable from a real photograph you'd find in a mag
     } catch (error) {
         console.error('Image generation error:', error.message);
         throw error; // No fallback, propagate the error
-    }
-}
-
-// Generate fallback images using Cloudinary or another source
-async function generateFallbackImages(prompt, count) {
-    try {
-        // Create pure transparent images with text overlay only
-        return Promise.all(
-            Array(count).fill().map((_, index) => {
-                // Create a transparent base with just text overlay
-                return cloudinary.url('placeholder/transparent', {
-                    transformation: [
-                        // Use a transparent background explicitly
-                        { width: 800, height: 800, crop: 'fill', background: 'transparent' },
-                        { 
-                            overlay: {
-                                font_family: 'Arial',
-                                font_size: 80, // Larger text
-                                font_weight: 'bold',
-                                text: encodeURIComponent(prompt)
-                            },
-                            color: 'ffffff',
-                            effect: "shadow:40:0:0:0:black", // Add slight shadow to text for readability
-                            gravity: "center"
-                        }
-                    ]
-                });
-            })
-        );
-    } catch (err) {
-        console.error('Error generating fallback images:', err);
-        // Ultimate fallback with pure transparency
-        return Array(count).fill().map(() => 
-            `https://placehold.co/800x800/transparent/white?text=${encodeURIComponent(prompt)}`
-        );
     }
 }
 
@@ -523,13 +474,60 @@ const upload = multer({
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
+// Helper function to resize and optimize image to reduce processing time
+async function optimizeImage(imageDataUrl, maxWidth = 800, maxHeight = 800, quality = 80) {
+    try {
+        // Parse data URL
+        const matches = imageDataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (!matches || matches.length !== 3) {
+            console.log('Invalid data URL format, returning original');
+            return imageDataUrl;
+        }
+        
+        const mimeType = matches[1];
+        const base64Data = matches[2];
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // Use sharp to resize and optimize the image
+        let optimizedBuffer;
+        try {
+            optimizedBuffer = await sharp(buffer)
+                .resize({
+                    width: maxWidth,
+                    height: maxHeight,
+                    fit: 'inside',
+                    withoutEnlargement: true
+                })
+                .jpeg({ quality }) // Convert to JPEG with specified quality
+                .toBuffer();
+                
+            console.log('Image successfully optimized');
+        } catch (err) {
+            console.error('Error optimizing image with sharp:', err);
+            return imageDataUrl; // Return original if optimization fails
+        }
+        
+        // Convert back to base64 data URL
+        return `data:image/jpeg;base64,${optimizedBuffer.toString('base64')}`;
+    } catch (error) {
+        console.error('Image optimization error:', error);
+        return imageDataUrl; // Return original if any error occurs
+    }
+}
+
 // Helper function to generate variations based on an uploaded image
 async function generateVariationsFromUpload(imageUrl, prompt) {
     try {
-        console.log('Generating variations based on uploaded image:', imageUrl);
+        console.log('Generating variations based on uploaded image');
         
         if (!GEMINI_API_KEY) {
             throw new Error('No GEMINI_API_KEY provided. Cannot generate image variations.');
+        }
+        
+        // Optimize the input image first if it's a data URL
+        let optimizedImageUrl = imageUrl;
+        if (imageUrl.startsWith('data:')) {
+            optimizedImageUrl = await optimizeImage(imageUrl);
         }
         
         // Initialize Gemini API
@@ -549,11 +547,25 @@ async function generateVariationsFromUpload(imageUrl, prompt) {
         async function generateVariation(enhancedPrompt, index) {
             console.log(`Generating variation ${index + 1} with prompt: ${enhancedPrompt.substring(0, 50)}...`);
             
-            // Download the original image to use as input
-            const imageResponse = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-            const imageBuffer = Buffer.from(imageResponse.data);
-            const base64Image = imageBuffer.toString('base64');
-            const mimeType = 'image/jpeg'; // Assuming JPEG format - adjust as needed
+            // Check if imageUrl is a base64 string or a URL
+            let base64Image;
+            let mimeType = 'image/jpeg';
+            
+            if (optimizedImageUrl.startsWith('data:')) {
+                // Already a data URL, extract the base64 part
+                const matches = optimizedImageUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+                if (matches && matches.length === 3) {
+                    mimeType = matches[1];
+                    base64Image = matches[2];
+                } else {
+                    throw new Error('Invalid data URL format');
+                }
+            } else {
+                // Download the original image to use as input
+                const imageResponse = await axios.get(optimizedImageUrl, { responseType: 'arraybuffer' });
+                const imageBuffer = Buffer.from(imageResponse.data);
+                base64Image = imageBuffer.toString('base64');
+            }
             
             // Generate content with both image and text as input
             const result = await model.generateContent({
@@ -608,23 +620,9 @@ async function generateVariationsFromUpload(imageUrl, prompt) {
                     if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
                         console.log(`Successfully generated variation ${index + 1}!`);
                         
-                        // Create temporary directory if it doesn't exist
-                        const tmpDir = path.join(process.cwd(), 'tmp');
-                        await fs.mkdir(tmpDir, { recursive: true });
-                        
-                        // Save image to temporary file
-                        const imageFileName = `variation_${Date.now()}_${index}.png`;
-                        const imagePath = path.join(tmpDir, imageFileName);
-                        await fs.writeFile(imagePath, Buffer.from(part.inlineData.data, 'base64'));
-                        
-                        // Upload to Cloudinary
-                        const uploadResult = await cloudinary.uploader.upload(imagePath);
-                        
-                        // Delete temporary file
-                        await fs.unlink(imagePath);
-                        
-                        console.log(`Variation ${index + 1} uploaded to Cloudinary: ${uploadResult.secure_url}`);
-                        return uploadResult.secure_url;
+                        // Return base64 data URL directly instead of uploading to Cloudinary
+                        const dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                        return dataUrl;
                     }
                 }
                 
@@ -658,11 +656,11 @@ async function generateVariationsFromUpload(imageUrl, prompt) {
         console.log(`Successfully generated ${variationUrls.length} variations`);
         
         // Return array with original image as first item, followed by variations
-        return [imageUrl, ...variationUrls];
+        return [optimizedImageUrl, ...variationUrls];
     } catch (error) {
         console.error('Variation generation error:', error.message);
         // Return just the original image if variations fail
-        return [imageUrl];
+        return [optimizedImageUrl];
     }
 }
 
@@ -679,26 +677,35 @@ router.post('/upload', upload.single('image'), async (req, res) => {
         const prompt = req.body.prompt || 'generated image';
         console.log(`Processing image upload with prompt: ${prompt}`);
         
-        // Upload the original image to Cloudinary
-        const uploadResult = await new Promise((resolve, reject) => {
-            const uploadStream = cloudinary.uploader.upload_stream(
-                { folder: 'uploads' },
-                (error, result) => {
-                    if (error) reject(error);
-                    else resolve(result);
-                }
-            );
-            
-            uploadStream.end(req.file.buffer);
+        // Convert buffer to base64 data URL
+        const mimeType = req.file.mimetype || 'image/jpeg';
+        const base64Data = req.file.buffer.toString('base64');
+        const imageDataUrl = `data:${mimeType};base64,${base64Data}`;
+        
+        // Optimize the image before processing
+        const optimizedImageUrl = await optimizeImage(imageDataUrl);
+        console.log('Image converted and optimized');
+        
+        // Set a response timeout to prevent 504 errors on Vercel
+        const TIMEOUT_MS = 25000; // 25 seconds (Vercel serverless function timeout is 30s)
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Request processing timeout')), TIMEOUT_MS);
         });
         
-        console.log('Original image uploaded to Cloudinary:', uploadResult.secure_url);
+        // Start generating phrases early
+        const phrasesPromise = generatePhrases(prompt);
         
-        // Generate variations based on the uploaded image
-        const allImageUrls = await generateVariationsFromUpload(uploadResult.secure_url, prompt);
+        // Generate variations based on the uploaded image with timeout protection
+        const allImageUrls = await Promise.race([
+            generateVariationsFromUpload(optimizedImageUrl, prompt),
+            timeoutPromise.catch(() => {
+                console.log('Variation generation timed out, returning original image only');
+                return [optimizedImageUrl]; // Return just the original image if timeout occurs
+            })
+        ]);
         
-        // Generate phrases using DeepSeek
-        const phrases = await generatePhrases(prompt);
+        // Wait for phrases to complete
+        const phrases = await phrasesPromise;
         
         // Combine images with phrases
         const variations = allImageUrls.map((imageUrl, index) => ({
@@ -718,16 +725,15 @@ router.post('/upload', upload.single('image'), async (req, res) => {
             }
         }));
         
-        return res.status(200).json({
+        res.status(200).json({
             success: true,
             variations
         });
-        
     } catch (error) {
-        console.error('Error processing upload:', error);
-        return res.status(500).json({
+        console.error('Error processing image upload:', error);
+        res.status(500).json({
             success: false,
-            error: error.message || 'Server error'
+            error: 'Error processing image upload'
         });
     }
 });
@@ -865,25 +871,41 @@ router.post('/variations', async (req, res) => {
             });
         }
 
-        // Generate phrases using DeepSeek
-        const phrases = await generatePhrases(prompt);
+        // Set a response timeout to prevent 504 errors on Vercel
+        const TIMEOUT_MS = 25000; // 25 seconds (Vercel serverless function timeout is 30s)
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Request processing timeout')), TIMEOUT_MS);
+        });
+
+        // Start generating phrases early since they're fast
+        const phrasesPromise = generatePhrases(prompt);
 
         // If image is provided - generate variations based on the uploaded image
         if (hasImage && imageData) {
             console.log('User provided image, generating variations with Gemini');
             
             try {
-                // First, upload the base64 image to Cloudinary
-                const uploadResult = await cloudinary.uploader.upload(imageData, {
-                    folder: 'uploads'
-                });
+                // Generate just 2 variations to speed up response time
+                const numVariations = 2;
                 
-                console.log('Image uploaded to Cloudinary:', uploadResult.secure_url);
+                // Optimize the provided image before processing
+                const optimizedImageData = await optimizeImage(imageData);
+                console.log('Input image optimized');
                 
-                // Generate variations based on the uploaded image
-                const allImageUrls = await generateVariationsFromUpload(uploadResult.secure_url, prompt);
+                // Generate variations directly from the image data without Cloudinary
+                // Race against timeout to avoid 504 errors
+                const allImageUrls = await Promise.race([
+                    generateVariationsFromUpload(optimizedImageData, prompt),
+                    timeoutPromise.catch(() => {
+                        console.log('Variation generation timed out, returning original image only');
+                        return [optimizedImageData]; // Return just the original image if timeout occurs
+                    })
+                ]);
                 
                 console.log(`Generated ${allImageUrls.length} images (including original)`);
+                
+                // Wait for phrases to complete
+                const phrases = await phrasesPromise;
                 
                 // Combine images with phrases
                 const variations = allImageUrls.map((imageUrl, index) => ({
@@ -912,6 +934,9 @@ router.post('/variations', async (req, res) => {
                 
                 // If variation generation fails, fall back to just using the uploaded image
                 console.log('Falling back to using original image only');
+                
+                // Get the phrases that were already being generated
+                const phrases = await phrasesPromise;
                 
                 // Create variations with just the user-provided image
                 const variations = phrases.map((phrase, index) => ({
@@ -943,8 +968,31 @@ router.post('/variations', async (req, res) => {
             console.log('No image provided, generating images with Gemini API');
             
             try {
-                // Generate images using Gemini
-                const imageUrls = await generateImages(prompt);
+                // Generate fewer images to speed up response time
+                const numImages = 2;
+                
+                // Race against timeout to prevent 504 errors
+                const imagePromise = generateImages(prompt, numImages);
+                
+                const [imageUrls, phrases] = await Promise.all([
+                    Promise.race([
+                        imagePromise,
+                        timeoutPromise.catch(() => {
+                            console.log('Image generation timed out, returning empty result');
+                            return []; // Return empty array if timeout occurs
+                        })
+                    ]),
+                    phrasesPromise
+                ]);
+                
+                // If no images were generated, return an error
+                if (imageUrls.length === 0) {
+                    return res.status(500).json({
+                        success: false,
+                        error: 'Image generation failed or timed out',
+                        message: 'Unable to generate images. Please try updating your prompt or uploading your own image instead.'
+                    });
+                }
                 
                 // Combine images with phrases
                 const variations = imageUrls.map((imageUrl, index) => ({
