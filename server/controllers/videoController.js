@@ -513,7 +513,7 @@ Format your response EXACTLY like this:
   }
 };
 
-// @desc    Expand a script with Gemini
+// @desc    Expand a script
 // @route   POST /api/videos/expand-script
 // @access  Private
 const expandScript = async (req, res) => {
@@ -525,20 +525,6 @@ const expandScript = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Script is required'
-      });
-    }
-    
-    // Check user's subscription and usage
-    const user = await User.findById(req.user._id);
-    
-    if (!user.subscription || user.subscription.creditsUsed >= user.subscription.creditsTotal) {
-      return res.status(403).json({
-        success: false,
-        error: 'Credit limit reached',
-        usage: {
-          current: user.subscription?.creditsUsed || 0,
-          limit: user.subscription?.creditsTotal || 0,
-        }
       });
     }
     
@@ -576,10 +562,8 @@ Make it read like a real-world script treatment - short, focused, visual, and au
     
     const expandedScript = result.response.text();
     
-    // Update user's credit usage
-    await User.findByIdAndUpdate(req.user._id, {
-      $inc: { 'subscription.creditsUsed': 1 }
-    });
+    // Do NOT update user's credit usage for script expansion
+    // This is now free to use
     
     // Return the expanded script
     res.status(200).json({
@@ -617,20 +601,6 @@ const generateScenes = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Scene count must be between 3 and 10'
-      });
-    }
-    
-    // Check user's subscription and usage
-    const user = await User.findById(req.user._id);
-    
-    if (!user.subscription || user.subscription.creditsUsed >= user.subscription.creditsTotal) {
-      return res.status(403).json({
-        success: false,
-        error: 'Credit limit reached',
-        usage: {
-          current: user.subscription?.creditsUsed || 0,
-          limit: user.subscription?.creditsTotal || 0,
-        }
       });
     }
     
@@ -756,10 +726,8 @@ This MUST look like a frame from an actual movie or TV show that was filmed with
       .filter(result => result.status === 'fulfilled')
       .map(result => result.value);
     
-    // Update user's credit usage (count as one credit per image)
-    await User.findByIdAndUpdate(req.user._id, {
-      $inc: { 'subscription.creditsUsed': sceneCount }
-    });
+    // Do NOT update user's credit usage for generating scenes
+    // This is now free to use
     
     // Return the scenes with their images
     res.status(200).json({
@@ -788,20 +756,6 @@ const regenerateSceneImage = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Image prompt is required'
-      });
-    }
-    
-    // Check user's subscription and usage
-    const user = await User.findById(req.user._id);
-    
-    if (!user.subscription || user.subscription.creditsUsed >= user.subscription.creditsTotal) {
-      return res.status(403).json({
-        success: false,
-        error: 'Credit limit reached',
-        usage: {
-          current: user.subscription?.creditsUsed || 0,
-          limit: user.subscription?.creditsTotal || 0,
-        }
       });
     }
     
@@ -846,10 +800,8 @@ This MUST look like a frame from an actual movie or TV show that was filmed with
         // Look for inline image data
         for (const part of parts) {
           if (part.inlineData && part.inlineData.mimeType.startsWith('image/')) {
-            // Update user's credit usage
-            await User.findByIdAndUpdate(req.user._id, {
-              $inc: { 'subscription.creditsUsed': 1 }
-            });
+            // Do NOT update user's credit usage for regenerating a scene image
+            // This is now free
             
             // Return the image
             return res.status(200).json({
@@ -879,7 +831,7 @@ This MUST look like a frame from an actual movie or TV show that was filmed with
   }
 };
 
-// @desc    Create a video from scene images
+// @desc    Create a video from scene images (costs 1 credit)
 // @route   POST /api/videos/create-video-from-scenes
 // @access  Private
 const createVideoFromScenes = async (req, res) => {
@@ -890,6 +842,22 @@ const createVideoFromScenes = async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Scenes array is required'
+      });
+    }
+    
+    // Check user's subscription and credit usage for the video creation
+    // This is the ONLY endpoint that costs credits
+    const user = await User.findById(req.user._id);
+    
+    if (!user.subscription || user.subscription.creditsUsed >= user.subscription.creditsTotal) {
+      return res.status(403).json({
+        success: false,
+        error: 'Credit limit reached. Creating a video costs 1 credit.',
+        usage: {
+          current: user.subscription?.creditsUsed || 0,
+          limit: user.subscription?.creditsTotal || 0,
+          creditsRemaining: Math.max(0, user.subscription?.creditsTotal - user.subscription?.creditsUsed)
+        }
       });
     }
     

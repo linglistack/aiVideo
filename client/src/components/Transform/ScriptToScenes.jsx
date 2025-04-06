@@ -520,6 +520,12 @@ const ScriptToScenes = () => {
       
       if (response.data.success) {
         setVideoUrl(response.data.videoUrl);
+        
+        // Dispatch a custom event to notify other components (like Sidebar) to refresh user data
+        // This will update the credit display in the sidebar navigation
+        window.dispatchEvent(new Event('video-created'));
+        console.log('Dispatched video-created event to update credits display');
+        
         // Scroll to the video section
         setTimeout(() => {
           if (videoRef.current) {
@@ -532,7 +538,9 @@ const ScriptToScenes = () => {
         
         // Handle specific errors more gracefully
         let userFriendlyError = errorMsg;
-        if (errorMsg.includes('Invalid transformation component') || errorMsg.includes('Cloudinary')) {
+        if (errorMsg.includes('Credit limit reached')) {
+          userFriendlyError = 'You need 1 credit to create a video. Please upgrade your plan or purchase more credits.';
+        } else if (errorMsg.includes('Invalid transformation component') || errorMsg.includes('Cloudinary')) {
           userFriendlyError = 'There was an issue creating your video. Please try again with fewer scenes or different images.';
         }
         
@@ -569,7 +577,9 @@ const ScriptToScenes = () => {
       }
       
       // Provide more user-friendly error message for common issues
-      if (errorMsg.includes('timeout') || errorMsg.includes('ECONNABORTED')) {
+      if (errorMsg.includes('Credit limit reached') || errorMsg.includes('credit')) {
+        errorMsg = 'You need 1 credit to create a video. Please upgrade your plan or purchase more credits.';
+      } else if (errorMsg.includes('timeout') || errorMsg.includes('ECONNABORTED')) {
         errorMsg = 'Request timed out. The video may take longer to create than expected. Please try with fewer images.';
       } else if (errorMsg.includes('Invalid transformation component') || errorMsg.includes('Cloudinary')) {
         errorMsg = 'There was an issue with our video service. Please try again with fewer scenes or different images.';
@@ -803,6 +813,7 @@ const ScriptToScenes = () => {
                 ? 'bg-gray-700 text-gray-400 cursor-not-allowed' 
                 : 'bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white hover:opacity-90'}
                 transition-colors flex items-center`}
+              title="Video creation uses 1 credit"
             >
               {isCreatingVideo ? (
                 <>
@@ -814,7 +825,7 @@ const ScriptToScenes = () => {
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                   </svg>
-                  Create Video
+                  Create Video <span className="ml-1 text-xs opacity-80">(1 credit)</span>
                 </>
               )}
             </button>
