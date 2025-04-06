@@ -58,65 +58,52 @@ const Sidebar = ({ user, onLogout }) => {
   
   // Use the most up-to-date user data
   const currentUser = refreshedUser || user;
-  
-  // Fetch subscription usage data when component mounts or user changes
-  useEffect(() => {
-    const fetchSubscriptionUsage = async () => {
-      try {
-        setLoadingUsage(true);
-        
-        // Only fetch if we have a user with a token
-        if (!currentUser || !currentUser.token) {
-          console.log('Skipping subscription usage fetch - no authenticated user');
-          setSubscriptionUsage(null);
-          return;
-        }
-        
-        const response = await getSubscriptionUsage();
-        if (response.success) {
-          setSubscriptionUsage(response.usage);
-        } else {
-          console.error('Failed to fetch subscription usage:', response.error);
-          // Set to null to use fallback values
-          setSubscriptionUsage(null);
-        }
-      } catch (error) {
-        console.error('Error fetching subscription usage:', error);
+
+  // Fetch subscription usage data - defined as a reusable function
+  const fetchSubscriptionUsage = useCallback(async () => {
+    try {
+      setLoadingUsage(true);
+      
+      // Only fetch if we have a user with a token
+      if (!currentUser || !currentUser.token) {
+        console.log('Skipping subscription usage fetch - no authenticated user');
+        setSubscriptionUsage(null);
+        return;
+      }
+      
+      const response = await getSubscriptionUsage();
+      if (response.success) {
+        setSubscriptionUsage(response.usage);
+      } else {
+        console.error('Failed to fetch subscription usage:', response.error);
         // Set to null to use fallback values
         setSubscriptionUsage(null);
-      } finally {
-        setLoadingUsage(false);
       }
-    };
-    
+    } catch (error) {
+      console.error('Error fetching subscription usage:', error);
+      // Set to null to use fallback values
+      setSubscriptionUsage(null);
+    } finally {
+      setLoadingUsage(false);
+    }
+  }, [currentUser]);
+  
+  // Initial fetch on component mount or when user changes
+  useEffect(() => {
     // Only attempt to fetch if user is logged in
     if (currentUser && currentUser.token) {
       fetchSubscriptionUsage();
     } else {
       setLoadingUsage(false);
     }
-  }, [currentUser]);
-  
-  // Add a manual refresh function that can be called when needed
-  const refreshSubscriptionUsage = useCallback(async () => {
-    // Only refresh if there's a user
-    if (!currentUser || !currentUser.token) return;
-    
-    try {
-      const response = await getSubscriptionUsage();
-      if (response.success) {
-        setSubscriptionUsage(response.usage);
-      }
-    } catch (error) {
-      console.error('Error manually refreshing subscription data:', error);
-    }
-  }, [currentUser]);
+  }, [currentUser, fetchSubscriptionUsage]);
   
   // Add a listener for custom events that might trigger a refresh
   useEffect(() => {
-    // Listen for events that should trigger a refresh
+    // Function to handle video creation event
     const handleVideoCreated = () => {
-      refreshSubscriptionUsage();
+      console.log('Sidebar: Detected video-created event, refreshing subscription data');
+      fetchSubscriptionUsage();
     };
     
     // Add event listener
@@ -126,7 +113,7 @@ const Sidebar = ({ user, onLogout }) => {
     return () => {
       window.removeEventListener('video-created', handleVideoCreated);
     };
-  }, [refreshSubscriptionUsage]);
+  }, [fetchSubscriptionUsage]);
   
   // Generate CSS classes for menu items
   const getMenuItemClasses = (path) => {
@@ -155,27 +142,35 @@ const Sidebar = ({ user, onLogout }) => {
     setProfileDropdownOpen(!profileDropdownOpen);
   };
   
-  // Use the data we have with fallbacks
-  const subscription = user?.subscription || {};
-  const creditsUsed = subscription.creditsUsed || 0;
-  const creditsTotal = subscription.creditsTotal || 0;
-  const creditsRemaining = subscription.creditsRemaining !== undefined 
-    ? subscription.creditsRemaining
-    : Math.max(0, creditsTotal - creditsUsed);
+  // Always prefer the fresh subscription usage data when available
+  let creditsUsed, creditsTotal, creditsRemaining, daysRemaining;
   
-  const plan = user?.subscription?.plan || user?.plan || 'Free';
-  
-  // Calculate remaining days
-  const daysRemaining = subscriptionUsage 
-    ? subscriptionUsage.daysUntilReset 
-    : currentUser.subscription?.endDate 
+  if (subscriptionUsage) {
+    // Use the latest data from API
+    creditsUsed = subscriptionUsage.creditsUsed;
+    creditsTotal = subscriptionUsage.creditsTotal;
+    creditsRemaining = subscriptionUsage.creditsRemaining;
+    daysRemaining = subscriptionUsage.daysUntilReset;
+  } else {
+    // Fallback to user prop data
+    const subscription = user?.subscription || {};
+    creditsUsed = subscription.creditsUsed || 0;
+    creditsTotal = subscription.creditsTotal || 0;
+    creditsRemaining = subscription.creditsRemaining !== undefined 
+      ? subscription.creditsRemaining
+      : Math.max(0, creditsTotal - creditsUsed);
+    
+    daysRemaining = currentUser.subscription?.endDate 
       ? Math.ceil((new Date(currentUser.subscription.endDate) - new Date()) / (1000 * 60 * 60 * 24)) 
       : 30;
+  }
       
   // Calculate the percentage of credits used
   const usagePercentage = creditsTotal 
     ? Math.min(100, (creditsUsed / creditsTotal) * 100)
     : 0;
+  
+  const plan = user?.subscription?.plan || user?.plan || 'Free';
   
   return (
     <div className="w-64 bg-tiktok-dark h-screen fixed left-0 top-0 pt-6 border-r border-gray-800 overflow-y-auto flex flex-col">
