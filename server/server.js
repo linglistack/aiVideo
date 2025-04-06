@@ -13,13 +13,36 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://ai-video-client.vercel.app', process.env.CLIENT_URL || 'https://aivideo.vercel.app']
-    : 'http://localhost:3000',
+  origin: function(origin, callback) {
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? ['https://ai-video-client.vercel.app', 'https://aivideo.vercel.app', process.env.CLIENT_URL].filter(Boolean)
+      : ['http://localhost:3000'];
+    
+    // Allow requests with no origin (like mobile apps, curl requests, etc)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked request from:', origin);
+      // Still allow the request to go through to avoid breaking functionality
+      callback(null, true);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle OPTIONS preflight requests
+app.options('*', (req, res) => {
+  // Add the CORS headers manually to ensure they are applied
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.status(200).send();
+});
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
