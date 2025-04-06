@@ -485,11 +485,34 @@ const ScriptToScenes = () => {
       }));
       console.log('Scene image URL types:', imageUrlTypes);
       
+      // Prepare images for video creation (with or without text overlays based on current settings)
+      console.log('Applying text overlays based on user settings...');
+      const processedScenes = await Promise.all(
+        sceneImages.map(async (scene, index) => {
+          // Determine if we need to add text overlay for this specific scene
+          const shouldAddOverlay = showOverlays[index];
+          console.log(`Scene ${index}: overlay ${shouldAddOverlay ? 'enabled' : 'disabled'}`);
+          
+          let imageUrl = scene.imageUrl;
+          
+          // Apply text overlay if needed
+          if (shouldAddOverlay) {
+            console.log(`Applying text overlay to scene ${index}`);
+            imageUrl = await renderTextOverlay(imageUrl, scene.description, index);
+          }
+          
+          return {
+            imageUrl: imageUrl,
+            description: scene.description
+          };
+        })
+      );
+      
       console.log('Sending request to create video from scenes to:', `${config.videos}/create-video-from-scenes`);
       
       const response = await axios.post(
         `${config.videos}/create-video-from-scenes`,
-        { scenes: sceneImages },
+        { scenes: processedScenes },
         authHeader()
       );
       
