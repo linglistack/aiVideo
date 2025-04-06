@@ -218,7 +218,10 @@ const ScriptToScenes = () => {
           script: scriptToUse,
           count: sceneCount
         },
-        authHeader()
+        {
+          ...authHeader(),
+          timeout: 60000 // 60-second timeout
+        }
       );
 
       if (response.data.success) {
@@ -268,7 +271,23 @@ const ScriptToScenes = () => {
       }
     } catch (error) {
       console.error('Error generating scenes:', error);
-      setError(error.response?.data?.error || 'An unexpected error occurred');
+      
+      // Improved error handling
+      let errorMessage = 'An unexpected error occurred';
+      
+      // Handle different error scenarios
+      if (error.code === 'ECONNABORTED' || (error.response && error.response.status === 504)) {
+        errorMessage = 'Server timeout - The request took too long to process. Try again with a shorter script or fewer scenes.';
+      } else if (error.response && error.response.data) {
+        // Safely extract error message from response
+        errorMessage = typeof error.response.data.error === 'string' 
+          ? error.response.data.error 
+          : 'Server error: ' + (error.response.status || 'Unknown status');
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsGeneratingScenes(false);
     }
@@ -293,7 +312,10 @@ const ScriptToScenes = () => {
           { 
             imagePrompt: scene.imagePrompt
           },
-          authHeader()
+          {
+            ...authHeader(),
+            timeout: 30000 // 30-second timeout for individual image generation
+          }
         );
 
         if (response.data && response.data.imageUrl) {
@@ -304,7 +326,16 @@ const ScriptToScenes = () => {
         }
       } catch (error) {
         console.error(`Error on retry ${retries} for scene ${index + 1}:`, error);
+        
+        // Check for specific error types
+        if (error.code === 'ECONNABORTED' || (error.response && error.response.status === 504)) {
+          console.warn(`Timeout on retry ${retries} for scene ${index + 1}`);
+        }
+        
         retries++;
+        
+        // Add a small delay before retrying to avoid overwhelming the server
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
@@ -544,7 +575,7 @@ const ScriptToScenes = () => {
           
           {error && (
             <div className="mb-6 p-3 bg-red-900/30 border border-red-500/50 rounded-md text-red-300">
-              {error}
+              {typeof error === 'object' ? JSON.stringify(error) : error}
             </div>
           )}
         </div>
