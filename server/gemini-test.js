@@ -2,6 +2,7 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 async function testGemini() {
     // Get API key from environment
@@ -102,7 +103,7 @@ async function testGemini() {
                     console.log('Image data length:', part.inlineData.data.length);
                     
                     // Create directories if needed
-                    const tmpDir = path.join(process.cwd(), 'tmp');
+                    const tmpDir = path.join(os.tmpdir(), 'aivideo_tmp');
                     if (!fs.existsSync(tmpDir)) {
                         fs.mkdirSync(tmpDir, { recursive: true });
                     }

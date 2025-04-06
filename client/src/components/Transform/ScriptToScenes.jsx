@@ -768,30 +768,46 @@ const ScriptToScenes = () => {
             />
           </div>
           
-          <div className="mt-4 flex justify-between">
+          <div className="mt-4 flex justify-end">
             <button
               onClick={() => {
-                // Download the video
+                // Direct download using the download attribute
                 const link = document.createElement('a');
                 link.href = videoUrl;
-                link.download = 'scene-video.mp4';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
+                link.setAttribute('download', 'scene-video.mp4');
+                link.setAttribute('target', '_blank'); // Helps with some browsers
+                
+                // For cross-origin URLs, we need to use a fetch approach
+                fetch(videoUrl)
+                  .then(response => response.blob())
+                  .then(blob => {
+                    // Create object URL from blob
+                    const blobUrl = window.URL.createObjectURL(blob);
+                    link.setAttribute('href', blobUrl);
+                    
+                    // Append, click, and clean up
+                    document.body.appendChild(link);
+                    link.click();
+                    setTimeout(() => {
+                      document.body.removeChild(link);
+                      window.URL.revokeObjectURL(blobUrl);
+                    }, 100);
+                  })
+                  .catch(err => {
+                    console.error('Error downloading video:', err);
+                    // Fallback to direct approach if fetch fails
+                    link.href = videoUrl;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  });
               }}
-              className="px-4 py-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition-colors flex items-center"
+              className="px-4 py-2 bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white hover:opacity-90 transition-colors flex items-center rounded-md"
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Download Video
-            </button>
-            
-            <button
-              onClick={() => setVideoUrl('')}
-              className="px-4 py-2 bg-red-900/30 hover:bg-red-900/50 text-red-300 border border-red-900/30 rounded-md transition-colors"
-            >
-              Discard Video
             </button>
           </div>
         </div>

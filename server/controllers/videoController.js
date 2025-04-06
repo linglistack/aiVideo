@@ -4,12 +4,23 @@ const Subscription = require('../models/Subscription');
 const axios = require('axios');
 const cloudinary = require('cloudinary').v2;
 const path = require('path');
-const fs = require('fs/promises');
+const fs = require('fs').promises;
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { exec } = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 const { promisify } = require('util');
 const execPromise = promisify(exec);
+const os = require('os');
+
+// Import sharp with error handling
+let sharp;
+try {
+  sharp = require('sharp');
+  console.log('Sharp module loaded successfully');
+} catch (error) {
+  console.error('Error loading sharp module:', error.message);
+  sharp = null;
+}
 
 // Configure Cloudinary
 cloudinary.config({
@@ -273,7 +284,7 @@ const getVideoById = async (req, res) => {
   }
 };
 
-// Helper function to download video from external URL
+// Helper function to download video
 async function downloadVideo(videoUrl) {
   try {
     const response = await axios({
@@ -282,8 +293,8 @@ async function downloadVideo(videoUrl) {
       responseType: 'arraybuffer'
     });
     
-    // Create temp file path
-    const tempDir = path.join(process.cwd(), 'tmp');
+    // Create temp file path using OS temp directory
+    const tempDir = path.join(os.tmpdir(), 'aivideo_tmp');
     await fs.mkdir(tempDir, { recursive: true });
     const filePath = path.join(tempDir, `temp_video_${Date.now()}.mp4`);
     
@@ -875,31 +886,16 @@ const createVideoFromScenes = async (req, res) => {
   try {
     const { scenes } = req.body;
     
-    // Validate input
     if (!scenes || !Array.isArray(scenes) || scenes.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'Scene images are required'
-      });
-    }
-    
-    // Check user's subscription and usage
-    const user = await User.findById(req.user._id);
-    
-    if (!user.subscription || user.subscription.creditsUsed >= user.subscription.creditsTotal) {
-      return res.status(403).json({
-        success: false,
-        error: 'Credit limit reached',
-        usage: {
-          current: user.subscription?.creditsUsed || 0,
-          limit: user.subscription?.creditsTotal || 0,
-        }
+        error: 'Scenes array is required'
       });
     }
     
     // Create unique ID for this video
     const videoId = uuidv4();
-    const tempDir = path.join(process.cwd(), 'tmp', videoId);
+    const tempDir = path.join(os.tmpdir(), 'aivideo_tmp', videoId);
     const framesDir = path.join(tempDir, 'frames');
     
     // Create temp directories
@@ -908,7 +904,7 @@ const createVideoFromScenes = async (req, res) => {
     
     console.log(`Created temp directories: ${tempDir}`);
     
-    // Save each image to disk
+    // Save each image to disk with consistent dimensions
     const frameFiles = [];
     for (let i = 0; i < scenes.length; i++) {
       const scene = scenes[i];
@@ -916,11 +912,13 @@ const createVideoFromScenes = async (req, res) => {
       frameFiles.push(frameFile);
       
       try {
-        // Convert data URL to file
+        let imageBuffer;
+        
+        // Convert data URL to buffer
         if (scene.imageUrl.startsWith('data:')) {
           const base64Data = scene.imageUrl.split(',')[1];
-          await fs.writeFile(frameFile, Buffer.from(base64Data, 'base64'));
-          console.log(`Saved frame ${i} from data URL`);
+          imageBuffer = Buffer.from(base64Data, 'base64');
+          console.log(`Converted frame ${i} from data URL to buffer`);
         } else {
           // If it's a URL, download it
           const response = await axios({
@@ -928,16 +926,34 @@ const createVideoFromScenes = async (req, res) => {
             url: scene.imageUrl,
             responseType: 'arraybuffer'
           });
-          await fs.writeFile(frameFile, Buffer.from(response.data));
-          console.log(`Downloaded frame ${i} from URL`);
+          imageBuffer = Buffer.from(response.data);
+          console.log(`Downloaded frame ${i} from URL to buffer`);
+        }
+        
+        // Process image to ensure consistent dimensions
+        if (sharp) {
+          // Process with sharp to ensure consistent dimensions (1280x720)
+          await sharp(imageBuffer)
+            .resize({
+              width: 1280,
+              height: 720,
+              fit: 'contain',
+              background: { r: 0, g: 0, b: 0, alpha: 1 }
+            })
+            .toFile(frameFile);
+          console.log(`Processed frame ${i} with sharp for consistent dimensions`);
+        } else {
+          // Fallback to direct file write if sharp is not available
+          await fs.writeFile(frameFile, imageBuffer);
+          console.log(`Saved frame ${i} without processing (sharp not available)`);
         }
       } catch (frameError) {
-        console.error(`Error saving frame ${i}:`, frameError.message);
+        console.error(`Error processing frame ${i}:`, frameError.message);
         throw new Error(`Error processing image ${i}: ${frameError.message}`);
       }
     }
     
-    console.log(`Saved ${frameFiles.length} frames to disk`);
+    console.log(`Processed and saved ${frameFiles.length} frames with consistent dimensions`);
     
     // Create a simpler version of the video using FFmpeg
     // Use simpler FFmpeg approach - just show each image for 3 seconds
@@ -949,8 +965,10 @@ const createVideoFromScenes = async (req, res) => {
       const framesList = await fs.readdir(framesDir);
       console.log(framesList);
       
-      // Use the reliable image2 approach that worked in our test
-      const ffmpegCmd = `ffmpeg -y -f image2 -framerate 1/3 -i "${framesDir}/frame_%03d.png" -c:v libx264 -pix_fmt yuv420p "${outputVideoPath}"`;
+      // Use a more robust FFmpeg command with scale filter to ensure consistent dimensions
+      // Force 1280x720, maintain aspect ratio, pad with black, and ensure 3 seconds per image
+      const ffmpegCmd = `ffmpeg -y -f image2 -framerate 1/3 -i "${framesDir}/frame_%03d.png" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1" -c:v libx264 -preset medium -profile:v high -crf 23 -pix_fmt yuv420p -r 30 "${outputVideoPath}"`;
+      
       console.log(`Running FFmpeg command: ${ffmpegCmd}`);
       
       const { stdout, stderr } = await execPromise(ffmpegCmd);
@@ -972,8 +990,8 @@ const createVideoFromScenes = async (req, res) => {
       try {
         console.log('Trying fallback FFmpeg approach');
         
-        // Create a very simple command just to merge the images
-        const fallbackCmd = `ffmpeg -y -f image2 -i "${framesDir}/frame_%03d.png" -c:v libx264 -vf "fps=1/3" "${outputVideoPath}"`;
+        // Create a simpler fallback command but still enforce proper dimensions
+        const fallbackCmd = `ffmpeg -y -f image2 -i "${framesDir}/frame_%03d.png" -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=1/3" -c:v libx264 -preset fast -pix_fmt yuv420p "${outputVideoPath}"`;
         console.log(`Running fallback FFmpeg command: ${fallbackCmd}`);
         
         const { stdout, stderr } = await execPromise(fallbackCmd);

@@ -1,6 +1,7 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 require('dotenv').config();
 
 async function generateImage() {
@@ -74,7 +75,7 @@ async function generateImage() {
           console.log("Image data length:", part.inlineData.data.length);
           
           // Create directories if needed
-          const tmpDir = path.join(process.cwd(), "tmp");
+          const tmpDir = path.join(os.tmpdir(), "aivideo_tmp");
           if (!fs.existsSync(tmpDir)) {
             fs.mkdirSync(tmpDir, { recursive: true });
           }

@@ -3,13 +3,14 @@ const path = require('path');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const execPromise = promisify(exec);
+const os = require('os');
 
 // Create test images
 async function createTestImages() {
   console.log('Starting FFmpeg debug test');
   
   // Create test directory
-  const testDir = path.join(__dirname, 'test-ffmpeg');
+  const testDir = path.join(os.tmpdir(), 'aivideo_test-ffmpeg');
   const framesDir = path.join(testDir, 'frames');
   
   try {
