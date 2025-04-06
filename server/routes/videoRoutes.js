@@ -540,7 +540,8 @@ async function generateVariationsFromUpload(imageUrl, prompt) {
         const enhancedPrompts = [
             `Create a similar image to this but with different angle and lighting. Make it look like a real photograph of ${prompt}.`,
             `Generate a variation of this image with a different background but keep the same subject. Make it a realistic photograph of ${prompt}.`,
-            `Create an alternative version of this image but change the composition slightly. Keep it looking like a real photograph of ${prompt}.`
+            `Create an alternative version of this image but change the composition slightly. Keep it looking like a real photograph of ${prompt}.`,
+            `Transform this image with more dramatic lighting and a different perspective. Keep it looking like an authentic photograph of ${prompt}.`
         ];
         
         // Function to generate a single variation
@@ -687,7 +688,7 @@ router.post('/upload', upload.single('image'), async (req, res) => {
         console.log('Image converted and optimized');
         
         // Set a response timeout to prevent 504 errors on Vercel
-        const TIMEOUT_MS = 25000; // 25 seconds (Vercel serverless function timeout is 30s)
+        const TIMEOUT_MS = 28000; // 28 seconds (Vercel serverless function timeout is 30s)
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error('Request processing timeout')), TIMEOUT_MS);
         });
@@ -872,7 +873,7 @@ router.post('/variations', async (req, res) => {
         }
 
         // Set a response timeout to prevent 504 errors on Vercel
-        const TIMEOUT_MS = 25000; // 25 seconds (Vercel serverless function timeout is 30s)
+        const TIMEOUT_MS = 28000; // 28 seconds (Vercel serverless function timeout is 30s)
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => reject(new Error('Request processing timeout')), TIMEOUT_MS);
         });
@@ -885,8 +886,8 @@ router.post('/variations', async (req, res) => {
             console.log('User provided image, generating variations with Gemini');
             
             try {
-                // Generate just 2 variations to speed up response time
-                const numVariations = 2;
+                // Generate just 4 variations to speed up response time
+                const numVariations = 4;
                 
                 // Optimize the provided image before processing
                 const optimizedImageData = await optimizeImage(imageData);
@@ -969,7 +970,7 @@ router.post('/variations', async (req, res) => {
             
             try {
                 // Generate fewer images to speed up response time
-                const numImages = 2;
+                const numImages = 4;
                 
                 // Race against timeout to prevent 504 errors
                 const imagePromise = generateImages(prompt, numImages);
