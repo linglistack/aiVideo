@@ -325,7 +325,7 @@ const AppContent = ({ user, setUser, handleLogout }) => {
             user ? <AccountWithUsage user={user} setUser={setUser} /> : <Navigate to="/login" />
           } />
           <Route path="/create" element={
-            user ? <VideoGenerator /> : <Navigate to="/login" />
+            user ? <VideoGenerator user={user} /> : <Navigate to="/login" />
           } />
           <Route path="/ugc-avatars" element={
             user ? <div className="p-6">

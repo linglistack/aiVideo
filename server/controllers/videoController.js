@@ -1,5 +1,5 @@
 const Video = require('../models/Video');
-const User = require('../models/User');
+const User = require('../models/aiUser');
 const Subscription = require('../models/Subscription');
 const axios = require('axios');
 const cloudinary = require('cloudinary').v2;
@@ -27,6 +27,22 @@ async function uploadToCloudinary(imageBase64) {
   } catch (error) {
     console.error('Cloudinary upload error:', error);
     throw new Error('Failed to upload image');
+  }
+}
+
+// Helper function to download an image and convert to base64
+async function downloadImageAsBase64(imageUrl) {
+  try {
+    // Download the image
+    const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+    // Convert to base64
+    const base64Image = Buffer.from(response.data).toString('base64');
+    // Create a proper data URI
+    const mimeType = response.headers['content-type'] || 'image/jpeg';
+    return `data:${mimeType};base64,${base64Image}`;
+  } catch (error) {
+    console.error('Error downloading image:', error);
+    throw new Error('Failed to download image');
   }
 }
 
@@ -64,13 +80,13 @@ async function createTalkingAvatar(imageUrl, script) {
 // @access  Private
 const generateVideo = async (req, res) => {
   try {
-    const { productName, imageUrl, avatarType, scriptTone } = req.body;
+    const { prompt, imageUrl, phrase, isGeneratedImage } = req.body;
 
     // Validate input
-    if (!productName || !imageUrl) {
+    if (!prompt || !imageUrl || !phrase) {
       return res.status(400).json({
         success: false,
-        error: 'Product name and image are required'
+        error: 'Prompt, image, and phrase are required'
       });
     }
 
@@ -88,11 +104,35 @@ const generateVideo = async (req, res) => {
       });
     }
 
-    // Upload image to Cloudinary
-    const presenterImageUrl = await uploadToCloudinary(imageUrl);
+    // Process the image - handle both base64 and external URLs
+    let presenterImageUrl;
+    
+    if (imageUrl.startsWith('data:')) {
+      // It's already a base64 image from user upload
+      presenterImageUrl = await uploadToCloudinary(imageUrl);
+    } else if (isGeneratedImage && imageUrl.startsWith('http')) {
+      // It's an external URL from the Qwen API
+      try {
+        // Download and convert to base64
+        const base64Image = await downloadImageAsBase64(imageUrl);
+        // Upload to Cloudinary
+        presenterImageUrl = await uploadToCloudinary(base64Image);
+      } catch (error) {
+        console.error('Error processing external image:', error);
+        return res.status(400).json({
+          success: false,
+          error: 'Failed to process generated image'
+        });
+      }
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid image format'
+      });
+    }
 
-    // Generate script
-    const script = await generateScript(productName, scriptTone || 'enthusiastic');
+    // Generate script using the provided phrase
+    const script = phrase;
 
     // Create talking avatar video
     const videoResult = await createTalkingAvatar(presenterImageUrl, script);
@@ -100,15 +140,17 @@ const generateVideo = async (req, res) => {
     // Create video record in database
     const video = await Video.create({
       user: req.user._id,
-      title: `${productName} Promotion`,
-      description: `Promotional video for ${productName}`,
+      title: `${prompt} Video`,
+      description: `Video generated from prompt: ${prompt}`,
       videoUrl: videoResult.result_url,
       thumbnailUrl: videoResult.thumbnail_url,
       script,
       presenter: presenterImageUrl,
       settings: {
-        avatarType: avatarType || 'professional',
-        scriptTone: scriptTone || 'enthusiastic'
+        avatarType: 'professional',
+        scriptTone: 'enthusiastic',
+        isGeneratedImage: isGeneratedImage || false,
+        originalPrompt: prompt
       },
       status: 'completed'
     });

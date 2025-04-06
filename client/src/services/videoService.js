@@ -5,11 +5,20 @@ const API_URL = config.videos;
 
 // Create a helper function to get auth header
 const authHeader = () => {
-  const token = localStorage.getItem('userToken');
+  const user = JSON.parse(localStorage.getItem('user'));
+  if (!user || !user.token) {
+    console.error('No user token found in localStorage');
+    return {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    };
+  }
+  
   return {
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
+      'Authorization': `Bearer ${user.token}`
     }
   };
 };
@@ -20,6 +29,20 @@ export const generateVideo = async (videoData) => {
     const response = await axios.post(
       `${API_URL}/generate`, 
       videoData, 
+      authHeader()
+    );
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
+};
+
+// Generate image and phrase variations
+export const generateVariations = async (promptData) => {
+  try {
+    const response = await axios.post(
+      `${API_URL}/variations`,
+      promptData,
       authHeader()
     );
     return response.data;
