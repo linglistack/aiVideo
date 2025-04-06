@@ -707,7 +707,7 @@ const VideoGenerator = ({ user }) => {
       </div>
         
         {/* Steps Indicator */}
-        <div className="mb-8">
+        <div className="mb-8 max-w-md mx-auto">
           <div className="flex items-center">
             <div className={`flex items-center justify-center w-10 h-10 rounded-full ${step >= 1 ? 'bg-tiktok-pink' : 'bg-gray-700'} text-white font-bold`}>
               1
