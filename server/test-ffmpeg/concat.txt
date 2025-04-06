@@ -1,0 +1,11 @@
+file '/Users/gantz/Desktop/AiVideo/server/test-ffmpeg/frames/frame_000.png'
+duration 3
+file '/Users/gantz/Desktop/AiVideo/server/test-ffmpeg/frames/frame_001.png'
+duration 3
+file '/Users/gantz/Desktop/AiVideo/server/test-ffmpeg/frames/frame_002.png'
+duration 3
+file '/Users/gantz/Desktop/AiVideo/server/test-ffmpeg/frames/frame_003.png'
+duration 3
+file '/Users/gantz/Desktop/AiVideo/server/test-ffmpeg/frames/frame_004.png'
+duration 3
+file '/Users/gantz/Desktop/AiVideo/server/test-ffmpeg/frames/frame_004.png'

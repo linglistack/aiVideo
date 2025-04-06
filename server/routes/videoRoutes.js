@@ -10,7 +10,12 @@ const path = require('path');
 const { 
   generateVideo, 
   getUserVideos, 
-  getVideoById 
+  getVideoById,
+  transcribeAndSummarizeVideo,
+  expandScript,
+  generateScenes,
+  regenerateSceneImage,
+  createVideoFromScenes
 } = require('../controllers/videoController');
 const { protect } = require('../middleware/authMiddleware');
 const multer = require('multer');
@@ -1050,5 +1055,60 @@ router.post('/variations', async (req, res) => {
 
 router.get('/', protect, getUserVideos);
 router.get('/:id', protect, getVideoById);
+
+// Add a new route for video transcription and summarization
+router.post('/transcribe', protect, transcribeAndSummarizeVideo);
+
+// Add routes for script expansion and scene generation
+router.post('/expand-script', protect, expandScript);
+router.post('/generate-scenes', protect, generateScenes);
+
+// Add a route for video file uploads
+router.post('/upload', protect, upload.single('video'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No video file uploaded'
+      });
+    }
+
+    // Get file information
+    const videoBuffer = req.file.buffer;
+    const mimeType = req.file.mimetype;
+    
+    // Check if file is a video
+    if (!mimeType.startsWith('video/')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Uploaded file is not a video'
+      });
+    }
+    
+    // Process the uploaded video
+    // Since we're avoiding Cloudinary, we can use a temporary S3 bucket or store locally
+    // For demo purposes, we'll create a data URL
+    const base64Video = videoBuffer.toString('base64');
+    const videoUrl = `data:${mimeType};base64,${base64Video}`;
+    
+    res.status(200).json({
+      success: true,
+      videoUrl,
+      message: 'Video uploaded successfully'
+    });
+  } catch (error) {
+    console.error('Error uploading video:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error uploading video'
+    });
+  }
+});
+
+// Add the new route
+router.post('/regenerate-scene-image', protect, regenerateSceneImage);
+
+// Create video from scene images
+router.post('/create-video-from-scenes', protect, createVideoFromScenes);
 
 module.exports = router; 

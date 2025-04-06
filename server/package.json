@@ -27,7 +27,8 @@
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.13",
     "sharp": "^0.33.5",
-    "stripe": "^17.7.0"
+    "stripe": "^17.7.0",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

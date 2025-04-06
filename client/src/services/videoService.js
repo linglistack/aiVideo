@@ -69,4 +69,18 @@ export const getVideoById = async (videoId) => {
   } catch (error) {
     throw error.response?.data || error;
   }
+};
+
+// Transcribe and summarize a video
+export const transcribeVideo = async (videoUrl) => {
+  try {
+    const response = await axios.post(
+      `${API_URL}/transcribe`, 
+      { videoUrl }, 
+      authHeader()
+    );
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
 }; 

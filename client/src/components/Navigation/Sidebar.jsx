@@ -203,17 +203,17 @@ const Sidebar = ({ user, onLogout }) => {
             <span>Greenscreen Memes</span>
           </Link> */}
           
-          <Link to="/create" className={getMenuItemClasses("/create")}>
+          {/* <Link to="/create" className={getMenuItemClasses("/create")}>
             <IoVideocamOutline className="text-xl" />
             <span>Videos</span>
+          </Link> */}
+          
+          <Link to="/transform" className={getMenuItemClasses("/transform")}>
+            <IoRocketOutline className="text-xl" />
+            <span>Transform</span>
           </Link>
           
-          {/* <Link to="/schedule" className={getMenuItemClasses("/schedule")}>
-            <IoCalendarOutline className="text-xl" />
-            <span>Schedule</span>
-          </Link>
-          
-          <Link to="/campaigns" className={getMenuItemClasses("/campaigns")}>
+          {/* <Link to="/campaigns" className={getMenuItemClasses("/campaigns")}>
             <IoRocketOutline className="text-xl" />
             <span>Campaigns</span>
           </Link> */}

@@ -16,6 +16,7 @@ import Terms from './components/Legal/Terms';
 import Privacy from './components/Legal/Privacy';
 import Help from './components/Help/Help';
 import Contact from './components/Contact/Contact';
+import Transform from './components/Transform/Transform';
 import { getCurrentUser, logout, getProfile } from './services/authService';
 import Pricing from './components/Pricing/Pricing';
 import PaymentForm from './components/PaymentForm/PaymentForm';
@@ -326,6 +327,9 @@ const AppContent = ({ user, setUser, handleLogout }) => {
           } />
           <Route path="/create" element={
             user ? <VideoGenerator user={user} /> : <Navigate to="/login" />
+          } />
+          <Route path="/transform" element={
+            user ? <Transform /> : <Navigate to="/login" />
           } />
           <Route path="/ugc-avatars" element={
             user ? <div className="p-6">

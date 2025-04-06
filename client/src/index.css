@@ -3,8 +3,14 @@
 @tailwind utilities;
 
 /* Custom styles below this line */
+html,
 body {
   margin: 0;
+  padding: 0;
+  background-color: #000;
+  /* Set background to black */
+  min-height: 100vh;
+  /* Ensure minimum height is full viewport */
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
