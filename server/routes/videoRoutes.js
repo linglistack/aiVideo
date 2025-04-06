@@ -985,7 +985,7 @@ router.post('/variations', async (req, res) => {
                 return res.status(500).json({
                     success: false,
                     error: 'Gemini image generation failed',
-                    message: 'Unable to generate images. Please try updating your prompt oruploading your own image instead.',
+                    message: 'Unable to generate images. Please try updating your prompt or uploading your own image instead.',
                     details: error.message
                 });
             }
