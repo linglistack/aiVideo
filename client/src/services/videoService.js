@@ -83,4 +83,18 @@ export const transcribeVideo = async (videoUrl) => {
   } catch (error) {
     throw error.response?.data || error;
   }
+};
+
+// Use one credit
+export const useCredit = async () => {
+  try {
+    const response = await axios.post(
+      `${config.subscriptions}/use-credit`, 
+      {}, 
+      authHeader()
+    );
+    return response.data;
+  } catch (error) {
+    throw error.response?.data || error;
+  }
 }; 

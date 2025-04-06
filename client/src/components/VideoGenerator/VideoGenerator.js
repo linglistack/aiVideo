@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { generateVideo, generateVariations as generateVariationsAPI } from '../../services/videoService';
+import { generateVideo, generateVariations as generateVariationsAPI, useCredit as updateCreditUsage } from '../../services/videoService';
 
 const VideoGenerator = ({ user }) => {
   const navigate = useNavigate();
@@ -432,40 +432,39 @@ const VideoGenerator = ({ user }) => {
       setError('');
       
       if (!selectedVariation) {
-        setError('Please select a variation before generating the video');
+        setError('Please select a variation image');
         setLoading(false);
         return;
       }
 
       // Check if user has available credits
       if (availableCredits <= 0) {
-        setError('You have no credits remaining. Please upgrade your plan to generate more videos.');
+        setError('You have no credits remaining. Please upgrade your plan to download images.');
         setLoading(false);
         return;
       }
       
-      // Prepare video data for API
-      const videoData = {
-        prompt,
-        imageUrl: selectedVariation.overlayImage,
-        phrase: selectedVariation.phrase,
-        isGeneratedImage: selectedVariation.generatedImage || false
-      };
+      // Update credit usage in the database first
+      const creditResponse = await updateCreditUsage();
       
-      // Call API to generate video
-      const response = await generateVideo(videoData);
+      if (!creditResponse.success) {
+        setError(creditResponse.error || 'Failed to use credit. Please try again.');
+        setLoading(false);
+        return;
+      }
       
-      setGeneratedVideo(response.video);
+      // Update local state with the updated credit values from server
+      setAvailableCredits(creditResponse.creditsRemaining);
       
-      // After successful generation, credits count in database should be updated
-      // If parent component passes updated user data after credit use, the effect will trigger
-      refreshUserCredits();
+      // Download the image with text overlay using the existing downloadVariation function
+      downloadVariation(selectedVariation, variations.findIndex(v => v.id === selectedVariation.id));
+      
+      // Dispatch event for parent components to know a video was created
       window.dispatchEvent(new Event('video-created'));
 
-      handleNextStep();
     } catch (err) {
       console.error(err);
-      setError(err.message || 'Failed to generate video. Please try again.');
+      setError(err.message || 'Failed to download image. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -694,17 +693,18 @@ const VideoGenerator = ({ user }) => {
 
   return (
     <div className="pt-0 min-h-screen bg-black text-white">
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="max-w-4xl mx-auto px-12 sm:px-6 lg:px-8 py-8">
+      {/* <div className="max-w-5xl mx-auto py-12"> */}
+
         {/* Header */}
-        <div className="mb-8">
-          <Link to="/dashboard" className="text-gray-400 hover:text-white flex items-center">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
-            </svg>
-            Back to Dashboard
-          </Link>
-          <h1 className="text-3xl font-bold mt-4">Create New Video</h1>
-        </div>
+        <div className="text-center mb-12 mt-10">
+        <h1 className="text-4xl font-bold mb-4 bg-gradient-to-r from-tiktok-blue to-tiktok-pink inline-block text-transparent bg-clip-text">
+          Image Variations
+        </h1>
+        <p className="text-gray-400 max-w-2xl mx-auto">
+          Generate variations of images with text overlay
+        </p>
+      </div>
         
         {/* Steps Indicator */}
         <div className="mb-8">
@@ -716,15 +716,11 @@ const VideoGenerator = ({ user }) => {
             <div className={`flex items-center justify-center w-10 h-10 rounded-full ${step >= 2 ? 'bg-tiktok-pink' : 'bg-gray-700'} text-white font-bold`}>
               2
             </div>
-            <div className={`flex-1 h-1 mx-2 ${step >= 3 ? 'bg-tiktok-pink' : 'bg-gray-700'}`}></div>
-            <div className={`flex items-center justify-center w-10 h-10 rounded-full ${step >= 3 ? 'bg-tiktok-pink' : 'bg-gray-700'} text-white font-bold`}>
-              3
-            </div>
+            
           </div>
           <div className="flex justify-between mt-2 text-sm text-gray-400">
             <div className={step >= 1 ? 'text-tiktok-pink' : ''}>Input Details</div>
             <div className={step >= 2 ? 'text-tiktok-pink' : ''}>Choose Variation</div>
-            <div className={step >= 3 ? 'text-tiktok-pink' : ''}>Preview Video</div>
           </div>
         </div>
         
@@ -733,7 +729,7 @@ const VideoGenerator = ({ user }) => {
           {/* Step 1: Input Details */}
           {step === 1 && (
             <div>
-              <h2 className="text-xl font-bold mb-6">Enter Details for Your Video</h2>
+              <h2 className="text-xl font-bold mb-6">Enter Details for Your Image</h2>
               
               {/* Prompt Input - Required */}
               <div className="mb-6">
@@ -861,7 +857,7 @@ const VideoGenerator = ({ user }) => {
                     {availableCredits <= 0 ? (
                       <span className="ml-2 text-red-400">You need to upgrade your plan to generate videos.</span>
                     ) : (
-                      <span className="ml-2 text-gray-400">Generating a video will use 1 credit.</span>
+                      <span className="ml-2 text-gray-400">Downloading an image will use 1 credit.</span>
                     )}
                   </p>
                 </div>
@@ -918,7 +914,7 @@ const VideoGenerator = ({ user }) => {
                           <span>Variation {index + 1}</span>
                           <div className="flex space-x-2">
                             {/* Download Image Button */}
-                            <button 
+                            {/* <button 
                               onClick={(e) => {
                                 e.stopPropagation();
                                 downloadVariation(variation, index);
@@ -929,7 +925,7 @@ const VideoGenerator = ({ user }) => {
                               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                                 <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
                               </svg>
-                            </button>
+                            </button> */}
                             
                            
                           </div>
@@ -978,7 +974,7 @@ const VideoGenerator = ({ user }) => {
                     </>
                   ) : (
                     <>
-                      {availableCredits <= 0 ? 'No Credits Available' : 'Generate Video (1 Credit)'}
+                      {availableCredits <= 0 ? 'No Credits Available' : 'Download Image (1 Credit)'}
                       {availableCredits > 0 && (
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 ml-2" viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M10.293 3.293a1 1 0 011.414 0l6 6a1 1 0 010 1.414l-6 6a1 1 0 01-1.414-1.414L14.586 11H3a1 1 0 110-2h11.586l-4.293-4.293a1 1 0 010-1.414z" clipRule="evenodd" />

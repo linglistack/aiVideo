@@ -204,21 +204,22 @@ const Sidebar = ({ user, onLogout }) => {
             <span>Greenscreen Memes</span>
           </Link> */}
           
-          {/* <Link to="/create" className={getMenuItemClasses("/create")}>
-            <IoVideocamOutline className="text-xl" />
-            <span>Videos</span>
-          </Link> */}
           
-          {user.role === 'admin' && <Link to="/admin" className={getMenuItemClasses("/create")}>
+          
+          {user.role === 'admin' && <Link to="/admin" className={getMenuItemClasses("/admin")}>
             <IoDiamondOutline className="text-xl" />
             <span>Admin</span>
           </Link>}
-          
+
           <Link to="/transform" className={getMenuItemClasses("/transform")}>
             <IoRocketOutline className="text-xl" />
             <span>Transform</span>
           </Link>
           
+          <Link to="/create" className={getMenuItemClasses("/create")}>
+            <IoImageOutline className="text-xl" />
+            <span>Image Variations</span>
+          </Link>
            
 
           {/* <Link to="/campaigns" className={getMenuItemClasses("/campaigns")}>
