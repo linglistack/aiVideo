@@ -17,6 +17,8 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
     fontSize: 14 // Default small text
   });
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [cursorPosition, setCursorPosition] = useState(0);
+  const textAreaRef = useRef(null);
   const modalRef = useRef(null);
   const imageContainerRef = useRef(null);
   const textOverlayRef = useRef(null);
@@ -25,6 +27,9 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
   // Reset edited text and position when modal is opened with new text
   useEffect(() => {
     setEditedText(text);
+    // Reset cursor position when text changes
+    setCursorPosition(text.length);
+    
     // If we have saved position data, use it, otherwise default
     if (scene && scene.textPosition) {
       setTextPosition(scene.textPosition);
@@ -44,6 +49,44 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
       });
     }
   }, [text, isOpen, scene]);
+  
+  // Track cursor position in textarea
+  const handleTextAreaChange = (e) => {
+    const value = e.target.value;
+    setEditedText(value);
+    setCursorPosition(e.target.selectionStart);
+  };
+  
+  // Keep focus on textarea when clicking in it
+  const handleTextAreaClick = (e) => {
+    setCursorPosition(e.target.selectionStart);
+  };
+  
+  // Add emoji at cursor position
+  const addEmoji = (emoji) => {
+    if (textAreaRef.current) {
+      const beforeCursor = editedText.substring(0, cursorPosition);
+      const afterCursor = editedText.substring(cursorPosition);
+      const newText = beforeCursor + emoji + afterCursor;
+      setEditedText(newText);
+      
+      // Update cursor position to after the inserted emoji
+      const newPosition = cursorPosition + emoji.length;
+      setCursorPosition(newPosition);
+      
+      // Focus back on textarea and set selection
+      setTimeout(() => {
+        if (textAreaRef.current) {
+          textAreaRef.current.focus();
+          textAreaRef.current.setSelectionRange(newPosition, newPosition);
+        }
+      }, 0);
+    } else {
+      // Fallback to appending if textarea ref isn't available
+      setEditedText(prev => prev + emoji);
+    }
+    setShowEmojiPicker(false);
+  };
   
   // Handle drag start
   const handleMouseDown = (e) => {
@@ -121,12 +164,6 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [isOpen, onClose]);
-  
-  // Add emoji to text
-  const addEmoji = (emoji) => {
-    setEditedText(prev => prev + emoji);
-    setShowEmojiPicker(false);
-  };
   
   // Update a specific style property
   const updateTextStyle = (property, value) => {
@@ -251,8 +288,10 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
             </label>
             <div className="relative">
               <textarea
+                ref={textAreaRef}
                 value={editedText}
-                onChange={(e) => setEditedText(e.target.value)}
+                onChange={handleTextAreaChange}
+                onClick={handleTextAreaClick}
                 className="w-full bg-black border border-gray-700 rounded-lg px-4 py-3 text-white 
                         placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-tiktok-pink flex-1 min-h-[100px]"
                 placeholder="Enter text for the overlay..."
