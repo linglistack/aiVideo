@@ -93,8 +93,9 @@ const NavBar = ({ user, onLogout }) => {
               StoryScene
             </Typography>
           </Logo> */}
+          <Link to="/" >
           <StorySceneLogo/>
-
+          </Link>
           {/* Mobile menu */}
           <Box sx={{ flexGrow: 1, display: { xs: 'flex', md: 'none' } }}>
             <IconButton
@@ -138,22 +139,7 @@ const NavBar = ({ user, onLogout }) => {
             </Menu>
           </Box>
 
-          {/* Mobile Logo */}
-          <Logo sx={{ display: { xs: 'flex', md: 'none' }, flexGrow: 1 }}>
-            <Typography
-              variant="h6"
-              noWrap
-              component={Link}
-              to="/"
-              sx={{
-                fontWeight: 700,
-                color: 'inherit',
-                textDecoration: 'none',
-              }}
-            >
-              TikTok Generator
-            </Typography>
-          </Logo>
+         
 
           {/* Desktop menu */}
           <Box sx={{ flexGrow: 1, display: { xs: 'none', md: 'flex' }, justifyContent: 'center' }}>
