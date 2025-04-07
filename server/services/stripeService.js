@@ -1,4 +1,27 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+// Import dotenv at the top to ensure environment variables are loaded
+require('dotenv').config();
+
+// Check if API key exists before initializing
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error('ERROR: STRIPE_SECRET_KEY environment variable is not set!');
+  console.error('Please make sure your .env file contains a valid STRIPE_SECRET_KEY');
+}
+
+// Initialize Stripe with error handling
+let stripe;
+try {
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+  console.log('Stripe initialized successfully');
+} catch (error) {
+  console.error('Failed to initialize Stripe:', error.message);
+  // Create a dummy stripe object to prevent crashes
+  stripe = {
+    customers: { create: () => Promise.reject(new Error('Stripe not initialized')) },
+    // Add other commonly used methods as needed
+    paymentMethods: { retrieve: () => Promise.reject(new Error('Stripe not initialized')) }
+  };
+}
+
 const aiUser = require('../models/aiUser');
 const Plan = require('../models/Plan');
 
@@ -407,6 +430,91 @@ const scheduleSubscriptionUpdate = async (customerId, subscriptionId, newPriceId
   }
 };
 
+/**
+ * Retry a failed payment using the same payment method
+ * @param {string} paymentIntentId The payment intent ID to retry
+ * @returns {Promise<Object>} Result of retry attempt
+ */
+const retryPayment = async (paymentIntentId) => {
+  try {
+    // First retrieve the payment intent to check its status
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    
+    // Only retry if the payment is in a failed state
+    if (paymentIntent.status !== 'requires_payment_method' && 
+        paymentIntent.status !== 'requires_action' &&
+        paymentIntent.status !== 'canceled') {
+      console.log(`Payment intent ${paymentIntentId} is in status ${paymentIntent.status}, not retriable`);
+      return {
+        success: false,
+        error: `Payment in status ${paymentIntent.status} cannot be retried`
+      };
+    }
+
+    // Get the customer ID associated with this payment
+    const customerId = paymentIntent.customer;
+    if (!customerId) {
+      return {
+        success: false,
+        error: 'No customer associated with this payment'
+      };
+    }
+
+    // Get customer's default payment method
+    const customer = await stripe.customers.retrieve(customerId, {
+      expand: ['default_source', 'invoice_settings.default_payment_method']
+    });
+
+    const defaultPaymentMethod = customer.invoice_settings?.default_payment_method;
+    if (!defaultPaymentMethod) {
+      return {
+        success: false,
+        error: 'No default payment method found for customer'
+      };
+    }
+
+    // Update the payment intent with the default payment method
+    const updatedIntent = await stripe.paymentIntents.update(paymentIntentId, {
+      payment_method: defaultPaymentMethod.id,
+      capture_method: 'automatic',
+      status: 'requires_confirmation'
+    });
+
+    // Confirm the payment
+    const confirmedIntent = await stripe.paymentIntents.confirm(paymentIntentId);
+    
+    // Check if successful or requires additional actions
+    if (confirmedIntent.status === 'succeeded') {
+      return {
+        success: true,
+        paymentIntentId: confirmedIntent.id,
+        status: confirmedIntent.status
+      };
+    } else if (confirmedIntent.status === 'requires_action') {
+      return {
+        success: false,
+        requiresAction: true,
+        paymentIntentId: confirmedIntent.id,
+        clientSecret: confirmedIntent.client_secret,
+        error: 'Payment requires additional customer action'
+      };
+    } else {
+      return {
+        success: false,
+        paymentIntentId: confirmedIntent.id,
+        status: confirmedIntent.status,
+        error: `Payment retry failed with status: ${confirmedIntent.status}`
+      };
+    }
+  } catch (error) {
+    console.error('Error retrying payment:', error);
+    return {
+      success: false,
+      error: error.message || 'An unexpected error occurred while retrying payment'
+    };
+  }
+};
+
 module.exports = {
   createCustomer,
   getOrCreateCustomer,
@@ -415,5 +523,6 @@ module.exports = {
   createCheckoutSession,
   createBillingPortalSession,
   updateSubscription,
-  scheduleSubscriptionUpdate
+  scheduleSubscriptionUpdate,
+  retryPayment
 }; 

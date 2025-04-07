@@ -1,0 +1,14 @@
+{
+    "name": "aivideo-subscription-scheduler",
+    "version": "1.0.0",
+    "description": "Background service for subscription management tasks",
+    "main": "scheduler.js",
+    "scripts": {
+        "start": "node scheduler.js"
+    },
+    "dependencies": {
+        "mongoose": "^7.0.0",
+        "dotenv": "^16.0.0",
+        "node-cron": "^3.0.0"
+    }
+}

@@ -3,6 +3,17 @@ const router = express.Router();
 const { protect } = require('../middleware/authMiddleware');
 const aiUser = require('../models/aiUser');
 const Payment = require('../models/Payment');
+// Ensure dotenv is loaded
+require('dotenv').config();
+
+// Initialize Stripe with error handling
+let stripe;
+try {
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+} catch (error) {
+  console.error('Failed to initialize Stripe in paymentRoutes:', error.message);
+  stripe = null;
+}
 
 // Load payment history from database instead of file
 let paymentHistory = {};
@@ -465,8 +476,6 @@ router.put('/methods/default', protect, async (req, res) => {
  */
 router.post('/methods/sync', protect, async (req, res) => {
   try {
-    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-    
     // Find user in database
     const user = await aiUser.findById(req.user._id);
     

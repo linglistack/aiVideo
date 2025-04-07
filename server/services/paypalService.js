@@ -148,10 +148,108 @@ async function getSubscription(subscriptionId) {
   }
 }
 
+/**
+ * Retry a failed subscription payment
+ * @param {string} subscriptionId Subscription ID
+ * @returns {Promise<Object>} Result
+ */
+async function retrySubscriptionPayment(subscriptionId) {
+  try {
+    const accessToken = await getAccessToken();
+    
+    // First check the subscription status
+    const subscription = await getSubscription(subscriptionId);
+    
+    // If subscription is not in a state that allows payment retry, return error
+    if (subscription.status !== 'APPROVAL_PENDING' && 
+        subscription.status !== 'SUSPENDED' && 
+        subscription.status !== 'ACTIVE') {
+      return {
+        success: false,
+        error: `Subscription is in ${subscription.status} state, cannot retry payment`
+      };
+    }
+    
+    // For PayPal subscriptions, we capture the failed transaction
+    // First, let's check the last failed transaction
+    const transactionsResponse = await axios({
+      method: 'get',
+      url: `${BASE_URL}/v1/billing/subscriptions/${subscriptionId}/transactions?start_time=${getDateXDaysAgo(30)}`,
+      headers: {
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+    
+    const transactions = transactionsResponse.data.transactions || [];
+    
+    // Find the most recent failed transaction
+    const failedTransaction = transactions.find(t => 
+      (t.status === 'FAILED' || t.status === 'DECLINED') && 
+      t.amount_with_breakdown
+    );
+    
+    if (!failedTransaction) {
+      return {
+        success: false,
+        error: 'No failed transaction found to retry'
+      };
+    }
+    
+    // For PayPal, we need to make a new billing attempt rather than retry
+    // the specific transaction - we can trigger this by calling the capture endpoint
+    const response = await axios({
+      method: 'post',
+      url: `${BASE_URL}/v1/billing/subscriptions/${subscriptionId}/capture`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      data: {
+        note: 'Retry of failed payment',
+        capture_type: 'OUTSTANDING_BALANCE',
+        amount: failedTransaction.amount_with_breakdown
+      }
+    });
+    
+    return {
+      success: true,
+      data: response.data
+    };
+  } catch (error) {
+    console.error('Error retrying PayPal subscription payment:', error);
+    
+    // Check for specific PayPal error types
+    if (error.response) {
+      const paypalError = error.response.data;
+      return {
+        success: false,
+        error: paypalError.message || 'PayPal payment retry failed',
+        details: paypalError.details || [],
+        httpStatus: error.response.status
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.message || 'Failed to retry PayPal payment'
+    };
+  }
+}
+
+/**
+ * Helper function to get a date X days ago in ISO format
+ */
+function getDateXDaysAgo(days) {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date.toISOString();
+}
+
 module.exports = {
   getAccessToken,
   createPlan,
   createSubscription,
   cancelSubscription,
-  getSubscription
+  getSubscription,
+  retrySubscriptionPayment
 };

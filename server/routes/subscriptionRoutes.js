@@ -20,6 +20,11 @@ const {
   confirmPaypalSubscription
 } = require('../controllers/subscriptionController');
 const { protect, admin } = require('../middleware/authMiddleware');
+const axios = require('axios');
+const paypalService = require('../services/paypalService');
+const aiUser = require('../models/aiUser');
+const SubscriptionLog = require('../models/SubscriptionLog');
+const Payment = require('../models/Payment');
 
 // Get all subscription plans
 router.get('/plans', getPlans);
@@ -248,67 +253,236 @@ router.post('/paypal/webhook', express.json(), async (req, res) => {
     console.log('PayPal webhook received:', event.event_type);
     
     // Verify webhook signature in production
-    // This would be implemented using PayPal's verification methods
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+        if (!webhookId) {
+          console.error('PayPal webhook ID not configured');
+          return res.status(500).send('Webhook configuration error');
+        }
+        
+        // Get PayPal webhook headers
+        const transmissionId = req.headers['paypal-transmission-id'];
+        const timestamp = req.headers['paypal-transmission-time'];
+        const signature = req.headers['paypal-transmission-sig'];
+        const certUrl = req.headers['paypal-cert-url'];
+        
+        if (!transmissionId || !timestamp || !signature || !certUrl) {
+          console.error('Missing PayPal webhook headers');
+          return res.status(400).send('Missing webhook headers');
+        }
+        
+        // Verify the webhook signature using PayPal API
+        const accessToken = await paypalService.getAccessToken();
+        
+        const verificationResponse = await axios({
+          method: 'post',
+          url: `${process.env.NODE_ENV === 'production' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com'}/v1/notifications/verify-webhook-signature`,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`
+          },
+          data: {
+            transmission_id: transmissionId,
+            transmission_time: timestamp,
+            cert_url: certUrl,
+            auth_algo: req.headers['paypal-auth-algo'],
+            transmission_sig: signature,
+            webhook_id: webhookId,
+            webhook_event: event
+          }
+        });
+        
+        if (verificationResponse.data.verification_status !== 'SUCCESS') {
+          console.error('PayPal webhook signature verification failed:', verificationResponse.data);
+          return res.status(400).send('Webhook signature verification failed');
+        }
+        
+        console.log('PayPal webhook signature verified successfully');
+      } catch (verificationError) {
+        console.error('Error verifying PayPal webhook signature:', verificationError);
+        return res.status(400).send('Webhook verification error');
+      }
+    }
     
     // Handle different event types
     switch (event.event_type) {
       case 'BILLING.SUBSCRIPTION.CREATED':
-        // Subscription was created
         console.log('PayPal subscription created:', event.resource.id);
         break;
         
       case 'BILLING.SUBSCRIPTION.ACTIVATED':
-        // Subscription was activated
         console.log('PayPal subscription activated:', event.resource.id);
         break;
         
       case 'BILLING.SUBSCRIPTION.UPDATED':
-        // Subscription was updated
         console.log('PayPal subscription updated:', event.resource.id);
         break;
         
-      case 'BILLING.SUBSCRIPTION.EXPIRED':
       case 'BILLING.SUBSCRIPTION.CANCELLED':
-        // Subscription ended or was cancelled
+      case 'BILLING.SUBSCRIPTION.EXPIRED':
         console.log('PayPal subscription ended:', event.resource.id);
         
-        // Find the subscription in our database
-        const subscription = await require('../models/Subscription').findOne({
-          paypalSubscriptionId: event.resource.id
+        // Find and update user with this subscription
+        const user = await aiUser.findOne({
+          'subscription.paypalSubscriptionId': event.resource.id
         });
         
-        if (subscription) {
-          // Update subscription status
-          subscription.status = 'cancelled';
-          await subscription.save();
+        if (user) {
+          // Log this cancellation
+          await SubscriptionLog.create({
+            userId: user._id,
+            eventType: 'subscription_cancelled',
+            description: `PayPal subscription cancelled via webhook: ${event.event_type}`,
+            planName: user.subscription.plan,
+            billingCycle: user.subscription.billingCycle,
+            paymentProvider: 'paypal',
+            subscriptionId: event.resource.id,
+            successful: true
+          });
           
-          // Update user's subscription data
-          const user = await require('../models/aiUser').findById(subscription.user);
-          if (user) {
-            user.subscription.isActive = false;
-            await user.save();
+          // Mark subscription as cancelled at period end
+          user.subscription.cancelAtPeriodEnd = true;
+          await user.save();
+          
+          // Try to send cancellation email
+          try {
+            const emailService = require('../services/emailService');
+            await emailService.sendSubscriptionCancellationEmail(user.email, {
+              name: user.name,
+              planName: user.subscription.plan,
+              endDate: user.subscription.endDate
+            });
+          } catch (emailError) {
+            console.error('Error sending cancellation email:', emailError);
           }
         }
         break;
         
       case 'PAYMENT.SALE.COMPLETED':
-        // Payment for subscription was successful
         console.log('PayPal payment completed for subscription');
-        // Process renewal if needed
-        break;
         
+        // If we have custom data, extract the user ID and plan info
+        if (event.resource && event.resource.custom) {
+          try {
+            const customData = JSON.parse(event.resource.custom);
+            
+            if (customData.userId) {
+              // Record the payment
+              const payment = await Payment.create({
+                userId: customData.userId,
+                amount: event.resource.amount.total,
+                currency: event.resource.amount.currency,
+                provider: 'paypal',
+                paypalTransactionId: event.resource.id,
+                status: 'complete',
+                description: `PayPal payment for ${customData.planName || 'subscription'}`,
+                metadata: {
+                  paypalResource: event.resource
+                }
+              });
+              
+              // Log the payment
+              await SubscriptionLog.create({
+                userId: customData.userId,
+                eventType: 'payment_succeeded',
+                description: `PayPal payment completed: ${event.resource.id}`,
+                planName: customData.planName,
+                paymentProvider: 'paypal',
+                amount: parseFloat(event.resource.amount.total),
+                successful: true,
+                paymentId: payment._id
+              });
+              
+              // Try to send success email
+              const user = await aiUser.findById(customData.userId);
+              if (user) {
+                try {
+                  const emailService = require('../services/emailService');
+                  await emailService.sendPaymentSuccessEmail(user.email, {
+                    name: user.name,
+                    planName: customData.planName,
+                    amount: parseFloat(event.resource.amount.total),
+                    date: new Date(),
+                    transactionId: event.resource.id
+                  });
+                } catch (emailError) {
+                  console.error('Error sending payment success email:', emailError);
+                }
+              }
+            }
+          } catch (parseError) {
+            console.error('Error parsing PayPal custom data:', parseError);
+          }
+        }
+        break;
+      
       case 'PAYMENT.SALE.DENIED':
       case 'PAYMENT.SALE.REFUNDED':
       case 'PAYMENT.SALE.REVERSED':
-        // Payment failed or was refunded
-        console.log('PayPal payment issue:', event.event_type);
+        console.log(`PayPal payment ${event.event_type.split('.').pop().toLowerCase()}: ${event.resource.id}`);
+        
+        // If we have custom data, extract the user ID and plan info
+        if (event.resource && event.resource.custom) {
+          try {
+            const customData = JSON.parse(event.resource.custom);
+            
+            if (customData.userId) {
+              // Record the payment issue
+              const payment = await Payment.create({
+                userId: customData.userId,
+                amount: event.resource.amount.total,
+                currency: event.resource.amount.currency,
+                provider: 'paypal',
+                paypalTransactionId: event.resource.id,
+                status: 'failed',
+                description: `PayPal payment ${event.event_type.split('.').pop().toLowerCase()} for ${customData.planName || 'subscription'}`,
+                errorMessage: event.summary || event.event_type,
+                metadata: {
+                  paypalResource: event.resource
+                }
+              });
+              
+              // Log the payment issue
+              await SubscriptionLog.create({
+                userId: customData.userId,
+                eventType: 'payment_failed',
+                description: `PayPal payment ${event.event_type.split('.').pop().toLowerCase()}: ${event.resource.id}`,
+                planName: customData.planName,
+                paymentProvider: 'paypal',
+                amount: parseFloat(event.resource.amount.total),
+                successful: false,
+                errorMessage: event.summary || event.event_type,
+                paymentId: payment._id
+              });
+              
+              // Try to send failure email
+              const user = await aiUser.findById(customData.userId);
+              if (user) {
+                try {
+                  const emailService = require('../services/emailService');
+                  await emailService.sendPaymentFailureEmail(user.email, {
+                    name: user.name,
+                    planName: customData.planName,
+                    amount: parseFloat(event.resource.amount.total),
+                    date: new Date(),
+                    errorMessage: event.summary || event.event_type
+                  });
+                } catch (emailError) {
+                  console.error('Error sending payment failure email:', emailError);
+                }
+              }
+            }
+          } catch (parseError) {
+            console.error('Error parsing PayPal custom data:', parseError);
+          }
+        }
         break;
         
       default:
         console.log('Unhandled PayPal webhook event:', event.event_type);
     }
     
-    // Return a 200 response to acknowledge receipt of the event
     res.status(200).send('Webhook received');
   } catch (error) {
     console.error('Error processing PayPal webhook:', error);

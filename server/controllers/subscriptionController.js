@@ -4,9 +4,20 @@ const stripeService = require('../services/stripeService');
 const paypalService = require('../services/paypalService');
 const Plan = require('../models/Plan');
 const aiUser = require('../models/aiUser');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const subscriptionScheduler = require('../services/subscriptionScheduler');
 const Payment = require('../models/Payment');
+
+// Ensure dotenv is loaded
+require('dotenv').config();
+
+// Initialize Stripe with error handling
+let stripe;
+try {
+  stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+} catch (error) {
+  console.error('Failed to initialize Stripe in subscriptionController:', error.message);
+  stripe = null;
+}
 
 // Plan configurations
 const PLANS = {

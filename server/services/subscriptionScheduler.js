@@ -1,12 +1,19 @@
 const mongoose = require('mongoose');
 const User = require('../models/aiUser');
 const Plan = require('../models/Plan');
+const Payment = require('../models/Payment');
+const SubscriptionLog = require('../models/SubscriptionLog');
 const cron = require('node-cron');
+const stripeService = require('./stripeService');
+const paypalService = require('./paypalService');
+const emailService = require('./emailService');
 
 // Define cron jobs at module level
 let resetSubscriptionsJob = null;
 let resetCreditCyclesJob = null;
 let checkExpiredSubscriptionsJob = null;
+let retryFailedPaymentsJob = null;
+let sendUpcomingRenewalNoticesJob = null;
 
 /**
  * Job to check and reset subscriptions that have reached their end date
@@ -48,9 +55,35 @@ const resetSubscriptionsJobFn = async () => {
           'subscription.lastResetDate': now
         });
         
+        // Log this subscription cycle reset
+        await logSubscriptionEvent({
+          userId: user._id,
+          eventType: 'cycle_reset',
+          description: `Subscription cycle reset for ${user.subscription.plan} plan`,
+          planName: user.subscription.plan,
+          billingCycle: user.subscription.billingCycle,
+          paymentProvider: user.subscription.paypalSubscriptionId ? 'paypal' : 'stripe',
+          subscriptionId: user.subscription.paypalSubscriptionId || user.subscription.stripeSubscriptionId,
+          successful: true
+        });
+        
         console.log(`Successfully reset subscription for user ${user._id}`);
       } catch (userError) {
         console.error(`Error resetting subscription for user ${user._id}:`, userError);
+        
+        // Log the failure
+        await logSubscriptionEvent({
+          userId: user._id,
+          eventType: 'cycle_reset_failed',
+          description: `Failed to reset subscription cycle: ${userError.message}`,
+          planName: user.subscription.plan,
+          billingCycle: user.subscription.billingCycle,
+          paymentProvider: user.subscription.paypalSubscriptionId ? 'paypal' : 'stripe',
+          subscriptionId: user.subscription.paypalSubscriptionId || user.subscription.stripeSubscriptionId,
+          successful: false,
+          errorMessage: userError.message
+        });
+        
         // Continue with other users even if one fails
       }
     }
@@ -58,6 +91,218 @@ const resetSubscriptionsJobFn = async () => {
     console.log('Subscription reset job completed');
   } catch (error) {
     console.error('Error in subscription reset job:', error);
+  }
+};
+
+/**
+ * Retry failed payments job
+ * Attempts to retry failed subscription payments with different strategies based on payment provider
+ */
+const retryFailedPaymentsJobFn = async () => {
+  try {
+    console.log('Running payment retry job...');
+    const now = new Date();
+    const threeDaysAgo = new Date(now);
+    threeDaysAgo.setDate(now.getDate() - 3);
+    
+    // Find failed payments from the last 3 days
+    const failedPayments = await Payment.find({
+      status: 'failed',
+      retryCount: { $lt: 3 }, // Only retry up to 3 times
+      createdAt: { $gte: threeDaysAgo },
+      paymentType: 'subscription'
+    });
+    
+    console.log(`Found ${failedPayments.length} failed subscription payments to retry`);
+    
+    for (const payment of failedPayments) {
+      try {
+        const user = await User.findById(payment.userId);
+        if (!user) {
+          console.log(`User not found for payment ${payment._id}, skipping retry`);
+          continue;
+        }
+        
+        let retryResult = { success: false };
+        
+        // Handle based on payment provider
+        if (payment.provider === 'stripe') {
+          // For Stripe, we can use the payment intent to retry
+          if (payment.stripePaymentIntentId) {
+            retryResult = await stripeService.retryPayment(payment.stripePaymentIntentId);
+          }
+        } else if (payment.provider === 'paypal') {
+          // For PayPal, we need to get the subscription and retry based on their API
+          if (user.subscription.paypalSubscriptionId) {
+            retryResult = await paypalService.retrySubscriptionPayment(user.subscription.paypalSubscriptionId);
+          }
+        }
+        
+        // Update payment record
+        payment.retryCount += 1;
+        payment.lastRetryDate = now;
+        
+        if (retryResult.success) {
+          payment.status = 'complete';
+          payment.retrySuccessDate = now;
+          
+          // Log success
+          await logSubscriptionEvent({
+            userId: user._id,
+            eventType: 'payment_retry_success',
+            description: `Successfully retried failed payment after ${payment.retryCount} attempts`,
+            planName: user.subscription.plan,
+            billingCycle: user.subscription.billingCycle,
+            paymentProvider: payment.provider,
+            subscriptionId: payment.provider === 'paypal' ? user.subscription.paypalSubscriptionId : user.subscription.stripeSubscriptionId,
+            paymentId: payment._id,
+            amount: payment.amount,
+            successful: true
+          });
+          
+          // Send success email
+          await emailService.sendPaymentRetrySuccessEmail(user.email, {
+            name: user.name,
+            planName: user.subscription.plan,
+            amount: payment.amount,
+            date: now
+          });
+        } else {
+          // Log failure
+          await logSubscriptionEvent({
+            userId: user._id,
+            eventType: 'payment_retry_failed',
+            description: `Failed to retry payment (attempt ${payment.retryCount})`,
+            planName: user.subscription.plan,
+            billingCycle: user.subscription.billingCycle,
+            paymentProvider: payment.provider,
+            subscriptionId: payment.provider === 'paypal' ? user.subscription.paypalSubscriptionId : user.subscription.stripeSubscriptionId,
+            paymentId: payment._id,
+            amount: payment.amount,
+            successful: false,
+            errorMessage: retryResult.error
+          });
+          
+          // If this was the 3rd failure, send a final notice email
+          if (payment.retryCount >= 3) {
+            await emailService.sendPaymentFinalFailureEmail(user.email, {
+              name: user.name,
+              planName: user.subscription.plan,
+              amount: payment.amount,
+              date: now
+            });
+            
+            // Mark the subscription as having payment issues
+            await User.findByIdAndUpdate(user._id, {
+              'subscription.hasPaymentIssue': true
+            });
+          }
+        }
+        
+        await payment.save();
+      } catch (retryError) {
+        console.error(`Error retrying payment ${payment._id}:`, retryError);
+        // Continue with next payment
+      }
+    }
+    
+    console.log('Payment retry job completed');
+  } catch (error) {
+    console.error('Error in payment retry job:', error);
+  }
+};
+
+/**
+ * Send upcoming renewal notices
+ * Notifies users about upcoming subscription renewals
+ */
+const sendUpcomingRenewalNoticesJobFn = async () => {
+  try {
+    console.log('Running upcoming renewal notifications job...');
+    const now = new Date();
+    
+    // Find users with subscriptions renewing in the next 3 days
+    const threeDaysFromNow = new Date(now);
+    threeDaysFromNow.setDate(now.getDate() + 3);
+    
+    const oneDayFromNow = new Date(now);
+    oneDayFromNow.setDate(now.getDate() + 1);
+    
+    // Get users with renewals coming up
+    const usersWithRenewals = await User.find({
+      'subscription.isActive': true,
+      'subscription.endDate': { 
+        $gte: now,
+        $lte: threeDaysFromNow
+      },
+      'subscription.paymentType': 'recurring' // Only for recurring subscriptions
+    });
+    
+    console.log(`Found ${usersWithRenewals.length} users with upcoming renewals`);
+    
+    for (const user of usersWithRenewals) {
+      try {
+        const endDate = new Date(user.subscription.endDate);
+        const daysUntilRenewal = Math.ceil((endDate - now) / (1000 * 60 * 60 * 24));
+        
+        // Determine if we've already sent a notification
+        const recentNotification = await SubscriptionLog.findOne({
+          userId: user._id,
+          eventType: 'renewal_notice_sent',
+          createdAt: { $gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) } // Last 24 hours
+        });
+        
+        if (recentNotification) {
+          console.log(`Already sent renewal notice to user ${user._id} in the last 24 hours, skipping`);
+          continue;
+        }
+        
+        console.log(`Sending renewal notice to user ${user._id}, renewing in ${daysUntilRenewal} days`);
+        
+        // Get plan details
+        const planName = user.subscription.plan.charAt(0).toUpperCase() + user.subscription.plan.slice(1);
+        const plan = await Plan.findOne({ name: planName });
+        
+        if (!plan) {
+          console.error(`Plan not found for user ${user._id}`);
+          continue;
+        }
+        
+        // Calculate billing amount based on billing cycle
+        const isYearly = user.subscription.billingCycle === 'yearly';
+        const renewalAmount = isYearly ? plan.yearlyPrice : plan.monthlyPrice;
+        
+        // Send email
+        await emailService.sendUpcomingRenewalEmail(user.email, {
+          name: user.name,
+          planName: user.subscription.plan,
+          daysUntilRenewal: daysUntilRenewal,
+          renewalDate: endDate,
+          amount: renewalAmount,
+          billingCycle: user.subscription.billingCycle
+        });
+        
+        // Log the notification
+        await logSubscriptionEvent({
+          userId: user._id,
+          eventType: 'renewal_notice_sent',
+          description: `Sent renewal notice for subscription renewing in ${daysUntilRenewal} days`,
+          planName: user.subscription.plan,
+          billingCycle: user.subscription.billingCycle,
+          paymentProvider: user.subscription.paypalSubscriptionId ? 'paypal' : 'stripe',
+          subscriptionId: user.subscription.paypalSubscriptionId || user.subscription.stripeSubscriptionId,
+          amount: renewalAmount,
+          successful: true
+        });
+      } catch (userError) {
+        console.error(`Error sending renewal notice to user ${user._id}:`, userError);
+        // Continue with next user
+      }
+    }
+    
+    console.log('Renewal notification job completed');
+  } catch (error) {
+    console.error('Error in renewal notification job:', error);
   }
 };
 
@@ -97,15 +342,39 @@ const initSubscriptionScheduler = () => {
     scheduled: false
   });
   
+  // Job to retry failed payments - run every 6 hours
+  retryFailedPaymentsJob = cron.schedule('0 */6 * * *', async () => {
+    try {
+      console.log('Running payment retry job');
+      await retryFailedPaymentsJobFn();
+    } catch (error) {
+      console.error('Error in payment retry job:', error);
+    }
+  });
+  
+  // Job to send upcoming renewal notices - run daily at 9 AM
+  sendUpcomingRenewalNoticesJob = cron.schedule('0 9 * * *', async () => {
+    try {
+      console.log('Running upcoming renewal notices job');
+      await sendUpcomingRenewalNoticesJobFn();
+    } catch (error) {
+      console.error('Error in upcoming renewal notices job:', error);
+    }
+  });
+  
   // Start the cron jobs
   resetSubscriptionsJob.start();
   resetCreditCyclesJob.start();
   checkExpiredSubscriptionsJob.start();
+  retryFailedPaymentsJob.start();
+  sendUpcomingRenewalNoticesJob.start();
   
   console.log('Subscription scheduler initialized with jobs:');
   console.log('- resetCreditCyclesJob: Runs daily at midnight');
   console.log('- resetSubscriptionsJob: Runs daily at 1 AM');
   console.log('- checkExpiredSubscriptionsJob: Runs every hour');
+  console.log('- retryFailedPaymentsJob: Runs every 6 hours');
+  console.log('- sendUpcomingRenewalNoticesJob: Runs daily at 9 AM');
 };
 
 /**
@@ -296,6 +565,25 @@ const checkExpiredSubscriptions = async () => {
   }
 };
 
+/**
+ * Log subscription events
+ */
+const logSubscriptionEvent = async (eventData) => {
+  try {
+    const subscriptionLog = new SubscriptionLog({
+      ...eventData,
+      createdAt: new Date()
+    });
+    
+    await subscriptionLog.save();
+    return subscriptionLog;
+  } catch (error) {
+    console.error('Error logging subscription event:', error);
+    // Don't throw, just log the error
+    return null;
+  }
+};
+
 module.exports = {
   initSubscriptionScheduler,
   resetSubscriptionsJobFn,
@@ -305,5 +593,8 @@ module.exports = {
   resetCreditCyclesJob,
   resetSubscriptionsJob,
   checkExpiredSubscriptions,
-  checkExpiredSubscriptionsJob
+  checkExpiredSubscriptionsJob,
+  retryFailedPaymentsJobFn,
+  sendUpcomingRenewalNoticesJobFn,
+  logSubscriptionEvent
 }; 
