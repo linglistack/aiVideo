@@ -13,8 +13,8 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
   const [textStyle, setTextStyle] = useState({
     color: "#FFFFFF", // Default white
     fontFamily: "Arial",
-    isBold: true,
-    fontSize: 16
+    isBold: false, // Default not bold
+    fontSize: 14 // Default small text
   });
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const modalRef = useRef(null);
@@ -39,8 +39,8 @@ const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index })
       setTextStyle({
         color: "#FFFFFF", // Default white
         fontFamily: "Arial",
-        isBold: true,
-        fontSize: 16
+        isBold: false, // Default not bold
+        fontSize: 14 // Default small text
       });
     }
   }, [text, isOpen, scene]);
@@ -420,6 +420,7 @@ const ScriptToScenes = () => {
   const [editedDescriptions, setEditedDescriptions] = useState({});
   const [textPositions, setTextPositions] = useState({}); // Store text positions for each scene
   const [textStyles, setTextStyles] = useState({}); // Store text styles for each scene
+  const [regeneratingScenes, setRegeneratingScenes] = useState({}); // Track which scenes are regenerating
   const [currentEditingIndex, setCurrentEditingIndex] = useState(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const textareaRef = useRef(null);
@@ -482,8 +483,8 @@ const ScriptToScenes = () => {
         initialStyles[index] = {
           color: "#FFFFFF", // Default white
           fontFamily: "Arial",
-          isBold: true,
-          fontSize: 16
+          isBold: false, // Default not bold
+          fontSize: 14 // Default small text
         };
       });
       setEditedDescriptions(initialDescriptions);
@@ -570,8 +571,8 @@ const ScriptToScenes = () => {
         [index]: {
           color: "#FFFFFF", // Default white
           fontFamily: "Arial",
-          isBold: true,
-          fontSize: 16
+          isBold: false, // Default not bold
+          fontSize: 14 // Default small text
         }
       }));
     }
@@ -877,8 +878,8 @@ const ScriptToScenes = () => {
         const style = textStyles[index] || {
           color: "#FFFFFF",
           fontFamily: "Arial",
-          isBold: true,
-          fontSize: 16
+          isBold: false, // Default not bold
+          fontSize: 14 // Default small text
         };
         
         // Add text with better sizing proportional to image
@@ -1000,8 +1001,8 @@ const ScriptToScenes = () => {
             textStyle: textStyles[index] || {
               color: "#FFFFFF",
               fontFamily: "Arial",
-              isBold: true,
-              fontSize: 16
+              isBold: false, // Default not bold
+              fontSize: 14 // Default small text
             } // Include text style data
           };
         })
@@ -1090,6 +1091,66 @@ const ScriptToScenes = () => {
       setError(errorMsg);
     } finally {
       setIsCreatingVideo(false);
+    }
+  };
+
+  // Function to regenerate a single scene image
+  const regenerateSceneImage = async (index) => {
+    if (!sceneImages[index] || regeneratingScenes[index]) return;
+    
+    try {
+      // Set regenerating state for this scene
+      setRegeneratingScenes(prev => ({
+        ...prev,
+        [index]: true
+      }));
+      
+      // Create a copy of scene images to modify
+      const updatedScenes = [...sceneImages];
+      
+      // Set a loading placeholder
+      updatedScenes[index] = {
+        ...updatedScenes[index],
+        imageUrl: 'https://placehold.co/600x400/black/white?text=Regenerating...'
+      };
+      setSceneImages(updatedScenes);
+      
+      // Call API to regenerate the image
+      const response = await axios.post(
+        `${config.videos}/regenerate-scene-image`,
+        { 
+          imagePrompt: sceneImages[index].imagePrompt
+        },
+        {
+          ...authHeader(),
+          timeout: 30000 // 30-second timeout for individual image generation
+        }
+      );
+      
+      if (response.data && response.data.imageUrl) {
+        // Update the image with the new one
+        updatedScenes[index] = {
+          ...updatedScenes[index],
+          imageUrl: response.data.imageUrl
+        };
+        setSceneImages(updatedScenes);
+      } else {
+        // If no image was returned, revert to original or show error
+        setError('Failed to regenerate image. Please try again.');
+      }
+    } catch (error) {
+      console.error(`Error regenerating image ${index + 1}:`, error);
+      setError('Failed to regenerate image. Please try again.');
+      
+      // Revert to original image if regeneration fails
+      const updatedScenes = [...sceneImages];
+      setSceneImages(updatedScenes);
+    } finally {
+      // Reset regenerating state
+      setRegeneratingScenes(prev => ({
+        ...prev,
+        [index]: false
+      }));
     }
   };
 
@@ -1256,7 +1317,7 @@ const ScriptToScenes = () => {
                         color: textStyles[index]?.color || '#FFFFFF',
                         fontFamily: textStyles[index]?.fontFamily || 'Arial',
                         fontWeight: textStyles[index]?.isBold ? 'bold' : 'normal',
-                        fontSize: `${textStyles[index]?.fontSize || 16}px`
+                        fontSize: `${textStyles[index]?.fontSize || 14}px`
                       }}
                     >
                       <p className="text-center leading-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)]">
@@ -1274,6 +1335,24 @@ const ScriptToScenes = () => {
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                       </svg>
+                    </button>
+                    
+                    <button 
+                      onClick={() => regenerateSceneImage(index)}
+                      className={`bg-black/50 hover:bg-black/70 text-white p-1 rounded-full transition-colors ${regeneratingScenes[index] ? 'cursor-not-allowed opacity-50' : ''}`}
+                      title="Regenerate this image"
+                      disabled={regeneratingScenes[index]}
+                    >
+                      {regeneratingScenes[index] ? (
+                        <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      )}
                     </button>
                     
                     <button 
