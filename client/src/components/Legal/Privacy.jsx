@@ -35,7 +35,7 @@ const Privacy = () => {
         <div className="bg-tiktok-dark rounded-2xl p-8 mb-6">
           <h2 className="text-xl font-semibold mb-4 text-white">1. Introduction</h2>
           <p className="text-gray-300 mb-4">
-            At TikTok Generator, we respect your privacy and are committed to protecting your personal data.
+            At StoryScene AI, we respect your privacy and are committed to protecting your personal data.
             This Privacy Policy explains how we collect, use, and safeguard your information when you use our website
             and services.
           </p>
@@ -60,8 +60,12 @@ const Privacy = () => {
               with our website, such as pages visited, time spent on pages, and other browsing information.
             </li>
             <li>
-              <span className="font-semibold text-white">Content Data:</span> Information and content you 
-              upload or create using our services, including images, texts, and videos.
+              <span className="font-semibold text-white">Story Content:</span> The story prompts, phrases, 
+              or narratives you input, as well as the scene images and videos generated from your input.
+            </li>
+            <li>
+              <span className="font-semibold text-white">Customization Data:</span> Any text overlays, 
+              edits, or customizations you make to your scene images.
             </li>
           </ul>
         </div>
@@ -72,9 +76,9 @@ const Privacy = () => {
             We use the information we collect for various purposes, including to:
           </p>
           <ul className="list-disc pl-6 text-gray-300 space-y-2 mb-4">
-            <li>Provide, maintain, and improve our services</li>
+            <li>Generate AI-powered scene images and story videos based on your input</li>
             <li>Process your subscriptions and payments</li>
-            <li>Send you updates, notifications, and support messages</li>
+            <li>Improve our AI's ability to create relevant and engaging story content</li>
             <li>Understand how users interact with our platform to enhance user experience</li>
             <li>Detect, prevent, and address technical issues or fraudulent activities</li>
           </ul>
@@ -156,7 +160,7 @@ const Privacy = () => {
         </div>
         
         <div className="text-center text-gray-400 mt-8">
-          <p>Last Updated: May 2023</p>
+          <p>Last Updated: July 2023</p>
         </div>
       </div>
     </div>

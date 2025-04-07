@@ -3,6 +3,29 @@ import { Link } from 'react-router-dom';
 import TikTokLogo from '../common/TikTokLogo';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
+// Add StoryScene logo component
+const StorySceneLogo = () => (
+  <svg height="42" width="200" xmlns="http://www.w3.org/2000/svg" viewBox="41 0 200 42">
+    {/* Larger "StoryScene" text */}
+    <text x="40" y="26" fontFamily="Arial" fontWeight="bold" fontSize="20" fill="white">StoryScene</text>
+    
+    {/* "AI" with gradient text */}
+    <text x="151" y="26" fontFamily="Arial" fontWeight="bold" fontSize="20" fill="url(#textGradient)">AI</text>
+    
+    {/* Define gradients */}
+    <defs>
+      <linearGradient id="sceneGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#25F4EE" />
+        <stop offset="100%" stopColor="#FE2C55" />
+      </linearGradient>
+      <linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#25F4EE" />
+        <stop offset="100%" stopColor="#FE2C55" />
+      </linearGradient>
+    </defs>
+  </svg>
+);
+
 const LandingPage = () => {
   const videosRef = useRef({});
   const [isPlaying, setIsPlaying] = useState({});
@@ -17,22 +40,22 @@ const LandingPage = () => {
     {
       id: 0,
       url: "https://www.w3schools.com/html/mov_bbb.mp4",
-      caption: "Check out this amazing product! #viral #trend",
-      user: "creativecreator",
+      caption: "Transform your story ideas into beautiful scenes! #storytelling #visualstory",
+      user: "storyartist",
       avatar: "https://via.placeholder.com/150"
     },
     {
       id: 1,
       url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
-      caption: "This is why everyone is switching to our service! 🚀",
-      user: "techinfluencer",
+      caption: "See how fast you can bring your story to life with our AI! 🚀",
+      user: "creativewriter",
       avatar: "https://via.placeholder.com/150"
     },
     {
       id: 2,
       url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
-      caption: "Family moments made better with our products",
-      user: "familylifestyle",
+      caption: "Turn your book chapters into stunning visual scenes",
+      user: "bookvisualizer",
       avatar: "https://via.placeholder.com/150"
     },
     // {
@@ -238,14 +261,14 @@ const LandingPage = () => {
       price: 19,
       videosPerMonth: 10,
       features: [
-        "10 videos per month",
-        "All 200+ UGC avatars",
-        "Generate unlimited viral hooks",
-        "Create your own AI avatars (25 images and 5 videos)",
+        "10 story videos per month",
+        "Refresh & Personalize every scene",
+        "Generate unlimited story prompts",
+        "Add custom emoji text overlays",
       ],
       disabledFeatures: [
-        "Publish to TikTok",
-        "Schedule/automate videos"
+        "Export to social media",
+        "Schedule/automate scene creation"
       ],
       popular: false,
       callToAction: "Buy Now"
@@ -256,12 +279,12 @@ const LandingPage = () => {
       price: 49,
       videosPerMonth: 50,
       features: [
-        "50 videos per month",
-        "All 200+ UGC avatars",
-        "Generate unlimited viral hooks",
-        "Create your own AI avatars (100 images and 25 videos)",
-        "Publish to TikTok",
-        "Schedule/automate videos"
+        "50 story videos per month",
+        "Refresh & Personalize every scene",
+        "Generate unlimited story prompts",
+        "Add custom emoji text overlays",
+        "Export to social media",
+        "Schedule/automate scene creation"
       ],
       disabledFeatures: [],
       popular: true,
@@ -273,12 +296,12 @@ const LandingPage = () => {
       price: 95,
       videosPerMonth: 150,
       features: [
-        "150 videos per month",
-        "All 200+ UGC avatars",
-        "Generate unlimited viral hooks",
-        "Create your own AI avatars (200 images and 50 videos)",
-        "Publish to TikTok",
-        "Schedule/automate videos"
+        "150 story videos scenes per month",
+        "Refresh & Personalize every scene",
+        "Generate unlimited story prompts",
+        "Add custom emoji text overlays",
+        "Export to social media",
+        "Schedule/automate scene creation"
       ],
       disabledFeatures: [],
       popular: false,
@@ -304,8 +327,8 @@ const LandingPage = () => {
       {/* Hero Section */}
       <section className="py-16 text-center">
         <div className="container mx-auto px-4 max-w-4xl">
-          <h2 className="text-4xl md:text-5xl font-bold mb-6">Create Viral TikTok Videos with AI</h2>
-          <p className="text-xl text-gray-300 mb-8">Transform your products into engaging TikTok videos with AI avatars that sell</p>
+          <h2 className="text-4xl md:text-5xl font-bold mb-6">Transform Your Stories into Visual Scenes with AI</h2>
+          <p className="text-xl text-gray-300 mb-8">Turn any story, book chapter, or idea into stunning images and videos in seconds</p>
           <Link to="/register" className="bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white font-bold py-3 px-8 rounded-full text-lg hover:opacity-90 transition-all inline-block">
             Start Creating Now
           </Link>
@@ -452,24 +475,24 @@ const LandingPage = () => {
               <div className="bg-tiktok-pink bg-opacity-20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                 <span className="text-tiktok-pink text-2xl font-bold">1</span>
               </div>
-              <h4 className="text-xl font-bold mb-2">Upload Your Product</h4>
-              <p className="text-gray-300">Simply upload your product image or enter its name and description</p>
+              <h4 className="text-xl font-bold mb-2">Input Your Idea</h4>
+              <p className="text-gray-300">Type a word, phrase or story – our AI expands it</p>
             </div>
             
             <div className="text-center">
               <div className="bg-tiktok-blue bg-opacity-20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                 <span className="text-tiktok-blue text-2xl font-bold">2</span>
               </div>
-              <h4 className="text-xl font-bold mb-2">Choose Your Avatar</h4>
-              <p className="text-gray-300">Select from dozens of AI avatars and customize your script</p>
+              <h4 className="text-xl font-bold mb-2">Customize Scenes</h4>
+              <p className="text-gray-300">Add emoji text, refresh images you don't like</p>
             </div>
             
             <div className="text-center">
               <div className="bg-tiktok-pink bg-opacity-20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
                 <span className="text-tiktok-pink text-2xl font-bold">3</span>
               </div>
-              <h4 className="text-xl font-bold mb-2">Generate & Share</h4>
-              <p className="text-gray-300">Our AI creates your video in minutes, ready to post on TikTok</p>
+              <h4 className="text-xl font-bold mb-2">Get Your Video</h4>
+              <p className="text-gray-300">We create your scenes into a seamless story video</p>
             </div>
           </div>
         </div>
@@ -506,7 +529,7 @@ const LandingPage = () => {
                 </div>
                 
                 <div className="text-center mb-6 text-gray-700">
-                  {plan.videosPerMonth} videos per month
+                  {plan.videosPerMonth} story scenes per month
                 </div>
                 
                 <div className="border-t border-gray-200 my-4"></div>
@@ -550,8 +573,8 @@ const LandingPage = () => {
       {/* CTA Section */}
       <section className="py-16 bg-gradient-to-r from-tiktok-blue to-tiktok-pink">
         <div className="container mx-auto px-4 text-center max-w-3xl">
-          <h3 className="text-3xl font-bold mb-6">Ready to Go Viral?</h3>
-          <p className="text-xl mb-8">Join thousands of creators and brands using our platform to create engaging TikTok content</p>
+          <h3 className="text-3xl font-bold mb-6">Ready to Visualize Your Stories?</h3>
+          <p className="text-xl mb-8">Join thousands of writers, creators, and storytellers bringing their stories to life</p>
           <Link to="/register" className="bg-white text-tiktok-pink font-bold py-3 px-8 rounded-full text-lg hover:bg-gray-100 transition-all inline-block">
             Start Your Free Trial
           </Link>
@@ -563,9 +586,8 @@ const LandingPage = () => {
       <footer className="py-8 border-t border-gray-800">
         <div className="container mx-auto px-4">
           <div className="flex flex-col md:flex-row justify-between items-center">
-            <div className="flex items-center space-x-2 mb-4 md:mb-0">
-              <TikTokLogo className="h-6 w-6" />
-              <span className="font-bold">TikTok Creator</span>
+            <div className="flex items-center mb-4 md:mb-0">
+              <StorySceneLogo />
             </div>
             
             <div className="flex space-x-6">
@@ -576,7 +598,7 @@ const LandingPage = () => {
             </div>
           </div>
           <div className="text-center mt-6 text-gray-500 text-sm">
-            &copy; {new Date().getFullYear()} TikTok Creator. All rights reserved.
+            &copy; {new Date().getFullYear()} StoryScene AI. All rights reserved.
           </div>
         </div>
       </footer>

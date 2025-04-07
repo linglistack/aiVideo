@@ -69,28 +69,28 @@ const Support = () => {
   const faqItems = [
     {
       id: 1,
-      question: "How many videos can I create per month?",
-      answer: "The number of videos you can create depends on your subscription plan. The Starter plan includes 10 videos per month, the Growth plan provides 50 videos per month, and the Scale plan offers 150 videos per month."
+      question: "How many story videos can I create per month?",
+      answer: "The number of story videos you can create depends on your subscription plan. The Starter plan includes 10 story videos per month, the Growth plan provides 50 videos per month, and the Scale plan offers 150 videos per month."
     },
     {
       id: 2,
       question: "How do I upgrade my subscription?",
-      answer: "To upgrade your subscription, go to the Billing section in your account settings. You can view available plans and select the one that best fits your needs. Your new plan will be activated immediately after payment."
+      answer: "To upgrade your subscription, go to the Subscription section in your account settings. You can view available plans and select the one that best fits your needs. Your new plan will be activated immediately after payment."
     },
     {
       id: 3,
-      question: "Can I download the videos I create?",
-      answer: "Yes, all videos you create are available for download. After your video is generated, you'll find a download button on the video details page. You can download in MP4 format for use across different platforms."
+      question: "Can I customize the text overlays on my scene images?",
+      answer: "Yes, you can add and edit emoji text overlays on each scene image. This allows you to emphasize key points or add dialogue to your story visuals. You can also choose to have scenes without text overlay if you prefer."
     },
     {
       id: 4,
-      question: "How do I customize my AI presenter?",
-      answer: "You can customize your AI presenter by uploading a photo during the video creation process. Our AI will animate the photo and create a natural-looking presenter who will deliver your script with your chosen tone and style."
+      question: "What if I don't like a scene image that was generated?",
+      answer: "If you don't like a particular scene image, you can simply click the refresh button to generate a new image for that scene while keeping the rest of your story intact. You can regenerate scenes as many times as needed until you're satisfied."
     },
     {
       id: 5,
-      question: "What payment methods do you accept?",
-      answer: "We accept all major credit cards (Visa, Mastercard, American Express, Discover) and PayPal. All payments are processed securely through Stripe."
+      question: "How does the AI expand my story input?",
+      answer: "Our AI can take even a simple word or phrase and expand it into a complete narrative. You can input anything from a single concept to a detailed story, and the AI will generate appropriate scene images based on your input, creating a cohesive visual story."
     }
   ];
 

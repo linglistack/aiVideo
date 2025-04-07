@@ -793,7 +793,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         monthlyPriceId: 'price_starter_monthly',
         yearlyPriceId: 'price_starter_yearly',
         videos: 10,
-        features: ['Basic editing tools', 'Standard quality', 'Email support']
+        features: ['Customized Editing', 'Standard quality', 'Email support']
       },
       {
         id: 'growth',
@@ -815,7 +815,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         monthlyPriceId: 'price_scale_monthly',
         yearlyPriceId: 'price_scale_yearly',
         videos: 150,
-        features: ['Premium effects', '4K quality', '24/7 dedicated support']
+        features: ['Premium effects', 'HD quality', '24/7 dedicated support']
       }
     ];
 

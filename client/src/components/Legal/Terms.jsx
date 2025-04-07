@@ -29,11 +29,11 @@ const Terms = () => {
         <div className="bg-tiktok-dark rounded-2xl p-8 mb-6">
           <h2 className="text-xl font-semibold mb-4 text-white">1. Introduction</h2>
           <p className="text-gray-300 mb-4">
-            Welcome to TikTok Generator! These Terms of Service govern your use of our website and services. 
+            Welcome to StoryScene AI! These Terms of Service govern your use of our website and services. 
             By accessing or using our services, you agree to be bound by these Terms.
           </p>
           <p className="text-gray-300 mb-4">
-            Our platform allows you to create AI-powered TikTok videos. These Terms outline your rights and
+            Our platform allows you to create AI-powered story videos from simple inputs. These Terms outline your rights and
             responsibilities when using our services.
           </p>
         </div>
@@ -57,6 +57,10 @@ const Terms = () => {
             and features, are available on our Pricing page.
           </p>
           <p className="text-gray-300 mb-4">
+            Each subscription plan includes a specific number of story videos you can create per month, with features 
+            such as unlimited story prompts, scene image refreshes, and emoji text overlays.
+          </p>
+          <p className="text-gray-300 mb-4">
             Payments are processed securely through our payment processor. By subscribing to our services,
             you agree to pay the applicable fees according to your chosen subscription plan.
           </p>
@@ -73,6 +77,10 @@ const Terms = () => {
             content that is illegal, harmful, threatening, abusive, defamatory, or otherwise objectionable.
           </p>
           <p className="text-gray-300 mb-4">
+            While our AI will expand on your input to create scene images and story content, you are ultimately
+            responsible for the nature of the stories and content you generate and share.
+          </p>
+          <p className="text-gray-300 mb-4">
             We reserve the right to remove any content that violates these Terms or is otherwise
             objectionable at our sole discretion.
           </p>
@@ -81,13 +89,13 @@ const Terms = () => {
         <div className="bg-tiktok-dark rounded-2xl p-8 mb-6">
           <h2 className="text-xl font-semibold mb-4 text-white">5. Intellectual Property Rights</h2>
           <p className="text-gray-300 mb-4">
-            You retain ownership of the content you create using our platform. However, by using our services,
+            You retain ownership of the story content you create using our platform. However, by using our services,
             you grant us a non-exclusive, worldwide, royalty-free license to use, reproduce, and display your
             content solely for the purpose of providing and improving our services.
           </p>
           <p className="text-gray-300 mb-4">
-            Our platform, including its design, features, and functionality, is the intellectual property
-            of TikTok Generator and is protected by copyright, trademark, and other intellectual property laws.
+            Our AI-generated scene images and the technology behind them are the intellectual property
+            of StoryScene AI and are protected by copyright, trademark, and other intellectual property laws.
           </p>
         </div>
         
@@ -123,7 +131,7 @@ const Terms = () => {
         </div>
         
         <div className="text-center text-gray-400 mt-8">
-          <p>Last Updated: May 2023</p>
+          <p>Last Updated: July 2023</p>
         </div>
       </div>
     </div>

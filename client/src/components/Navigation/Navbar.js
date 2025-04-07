@@ -24,6 +24,29 @@ const Logo = styled(Box)(({ theme }) => ({
   }
 }));
 
+// Add StoryScene logo component
+const StorySceneLogo = () => (
+  <svg height="42" width="200" xmlns="http://www.w3.org/2000/svg" viewBox="41 0 200 42">
+    {/* Larger "StoryScene" text */}
+    <text x="40" y="26" fontFamily="Arial" fontWeight="bold" fontSize="20" fill="white">StoryScene</text>
+    
+    {/* "AI" with gradient text */}
+    <text x="151" y="26" fontFamily="Arial" fontWeight="bold" fontSize="20" fill="url(#textGradient)">AI</text>
+    
+    {/* Define gradients */}
+    <defs>
+      <linearGradient id="sceneGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#25F4EE" />
+        <stop offset="100%" stopColor="#FE2C55" />
+      </linearGradient>
+      <linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#25F4EE" />
+        <stop offset="100%" stopColor="#FE2C55" />
+      </linearGradient>
+    </defs>
+  </svg>
+);
+
 const NavBar = ({ user, onLogout }) => {
   const [anchorElNav, setAnchorElNav] = useState(null);
   const [anchorElUser, setAnchorElUser] = useState(null);
@@ -55,7 +78,7 @@ const NavBar = ({ user, onLogout }) => {
       <Container maxWidth="lg">
         <Toolbar disableGutters>
           {/* Desktop Logo */}
-          <Logo sx={{ display: { xs: 'none', md: 'flex' }, mr: 2 }}>
+          {/* <Logo sx={{ display: { xs: 'none', md: 'flex' }, mr: 2 }}>
             <Typography
               variant="h6"
               noWrap
@@ -67,9 +90,10 @@ const NavBar = ({ user, onLogout }) => {
                 textDecoration: 'none',
               }}
             >
-              TikTok Generator
+              StoryScene
             </Typography>
-          </Logo>
+          </Logo> */}
+          <StorySceneLogo/>
 
           {/* Mobile menu */}
           <Box sx={{ flexGrow: 1, display: { xs: 'flex', md: 'none' } }}>

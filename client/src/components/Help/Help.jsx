@@ -45,64 +45,64 @@ const Help = () => {
     },
     {
       id: 'billing',
-      name: 'Billing & Subscriptions',
+      name: 'Subscriptions',
       icon: <IoWalletOutline className="text-xl" />
     },
     {
       id: 'account',
-      name: 'Account Management',
+      name: 'Account',
       icon: <IoPersonOutline className="text-xl" />
     },
-    {
-      id: 'settings',
-      name: 'Settings & Preferences',
-      icon: <IoSettingsOutline className="text-xl" />
-    }
+    // {
+    //   id: 'settings',
+    //   name: 'Settings & Preferences',
+    //   icon: <IoSettingsOutline className="text-xl" />
+    // }
   ];
   
   const faqItems = {
     'getting-started': [
       {
         id: 'gs-1',
-        question: 'How do I create my first video?',
-        answer: 'To create your first video, log in to your account and click on the "Create Video" button in your dashboard. Follow the step-by-step guide to select an avatar, enter your script, and generate your video. Once the video is created, you can download it or share it directly on social media.'
+        question: 'How do I create my first story video?',
+        answer: 'To create your first story video, log in to your account and click on the "Create Story" button in your dashboard. Type in your story idea, phrase, or narrative, and our AI will expand it to create multiple scene images. You can add text overlays or refresh any scenes you don\'t like. Once you\'re satisfied with all scenes, click "Create Video" to combine them into a seamless story video.'
       },
       {
         id: 'gs-2',
         question: 'What subscription plan should I choose?',
-        answer: 'Choose your subscription plan based on how many videos you need to create monthly. The Starter plan offers 10 videos per month, the Growth plan provides 50 videos, and the Scale plan allows for 150 videos. All plans include full access to our UGC avatars and viral hook generation features. You can upgrade or downgrade your plan at any time from your account settings.'
+        answer: 'Choose your subscription plan based on how many story videos you need to create monthly. The Starter plan offers 10 videos per month, the Growth plan provides 50 videos, and the Scale plan allows for 150 videos. All plans include unlimited story prompts, the ability to refresh scene images, and add emoji text overlays. You can upgrade or downgrade your plan at any time from your account settings.'
       },
       {
         id: 'gs-3',
-        question: 'How long does it take to generate a video?',
-        answer: 'Video generation typically takes 2-5 minutes, depending on the length and complexity of your script. Once submitted, you can monitor the progress in your dashboard. You\'ll receive a notification when your video is ready for viewing and download.'
+        question: 'How long does it take to generate scene images?',
+        answer: 'Scene image generation typically takes 15-30 seconds per image. The total time depends on the complexity of your story and how many scenes it requires. Once submitted, you can monitor the progress in your dashboard and start customizing each scene as soon as it\'s generated.'
       },
       {
         id: 'gs-4',
         question: 'Can I try the platform before subscribing?',
-        answer: 'Yes! We offer a free trial that includes 3 video credits. This allows you to test the platform\'s capabilities before committing to a subscription plan. No credit card is required to start the free trial.'
+        answer: 'Yes! We offer a free trial that includes 2 story video credits. This allows you to test the platform\'s capabilities before committing to a subscription plan. No credit card is required to start the free trial.'
       }
     ],
     'video-creation': [
       {
         id: 'vc-1',
-        question: 'What types of videos can I create?',
-        answer: 'Our platform allows you to create a variety of TikTok-style videos including product demonstrations, tutorials, testimonials, educational content, and entertainment. You can choose from over 200+ AI avatars or upload your own photos to create custom presenters.'
+        question: 'What types of stories can I create?',
+        answer: 'Our platform allows you to create a wide variety of story videos! You can start with anything from a single word or concept to a complete narrative. Create children\'s stories, educational content, marketing narratives, personal stories, or creative fiction. Our AI adapts to your input and generates appropriate scene images.'
       },
       {
         id: 'vc-2',
-        question: 'How do I customize my AI avatars?',
-        answer: 'To customize your AI avatar, navigate to the "Create Video" section and select "Custom Avatar". You can upload photos of yourself or your brand ambassador, and our AI will animate the photo to create a natural-looking presenter who will deliver your script with your chosen tone and style.'
+        question: 'How do I add text overlays to my scenes?',
+        answer: 'After your scene images are generated, you\'ll see an "Add Text" button on each image. Click it to add emoji text overlays. You can customize the text content, size, and position. This is perfect for adding dialogue, narration, or highlighting key points in your story scenes.'
       },
       {
         id: 'vc-3',
-        question: 'Can I edit my videos after creation?',
-        answer: 'Currently, our platform focuses on the initial video generation. For editing, we recommend downloading your video and using your preferred video editing software. However, you can easily regenerate a new video with modified script or avatar if you\'re not satisfied with the result.'
+        question: 'What if I don\'t like one of the generated scenes?',
+        answer: 'If you\'re not happy with any scene image, simply click the "Refresh" button on that specific scene. This will generate a new image based on the same story segment while keeping all your other scenes intact. You can refresh individual scenes as many times as needed until you\'re satisfied.'
       },
       {
         id: 'vc-4',
         question: 'What resolution and format are the videos?',
-        answer: 'Our videos are generated in 1080x1920 resolution (9:16 aspect ratio), which is optimal for TikTok, Instagram Reels, and YouTube Shorts. Videos are delivered in MP4 format, making them compatible with all major social media platforms and video players.'
+        answer: 'Our story videos are generated in 1080x1920 resolution (9:16 aspect ratio), which is optimal for social media platforms. The final videos are delivered in MP4 format, making them compatible with all major social media platforms and video players.'
       }
     ],
     'billing': [
@@ -130,8 +130,8 @@ const Help = () => {
     'account': [
       {
         id: 'acc-1',
-        question: 'How do I reset my password?',
-        answer: 'To reset your password, click "Forgot Password" on the login screen. Enter your email address, and we\'ll send you a password reset link. Follow the link to create a new password. For security reasons, password reset links expire after 24 hours.'
+        question: 'How do I save my story videos?',
+        answer: 'All story videos you create are automatically saved to your account\'s library. You can also download them to your device by clicking the "Download" button on any completed video. This gives you the flexibility to share them on social media or keep them for personal use.'
       },
       {
         id: 'acc-2',
@@ -141,24 +141,24 @@ const Help = () => {
       {
         id: 'acc-3',
         question: 'How do I delete my account?',
-        answer: 'To delete your account, go to Account > Settings > Delete Account. Please note that account deletion is permanent and will remove all your data, including generated videos, from our system. We recommend downloading any videos you wish to keep before deleting your account.'
+        answer: 'To delete your account, go to Account > Settings > Delete Account. Please note that account deletion is permanent and will remove all your data, including generated stories and videos, from our system. We recommend downloading any videos you wish to keep before deleting your account.'
       }
     ],
     'settings': [
       {
         id: 'set-1',
         question: 'How do I change notification settings?',
-        answer: 'To adjust your notification preferences, go to Account > Settings > Notifications. You can toggle email notifications for video completion, subscription updates, and marketing communications. You can also set up desktop notifications for real-time alerts about your video generation status.'
+        answer: 'To adjust your notification preferences, go to Account > Settings > Notifications. You can toggle email notifications for video completion, subscription updates, and marketing communications. You can also set up desktop notifications for real-time alerts about your scene generation status.'
       },
       {
         id: 'set-2',
-        question: 'Can I integrate with other platforms?',
-        answer: 'We currently offer direct sharing options for TikTok, Instagram, and YouTube. For more advanced integrations with other marketing platforms, we provide API access on our Scale plan. Check our documentation for details on API usage and available endpoints.'
+        question: 'Can I set default preferences for my stories?',
+        answer: 'Yes! Go to Account > Settings > Story Preferences to set your preferred visual style, number of scenes per story, and other story creation parameters. These settings will be pre-selected whenever you create a new story, saving you time in the creation process.'
       },
       {
         id: 'set-3',
-        question: 'How do I set default preferences for video creation?',
-        answer: 'Go to Account > Settings > Video Defaults to set your preferred avatar, voice style, and other video creation parameters. These settings will be pre-selected whenever you create a new video, saving you time in the creation process.'
+        question: 'How do I share my story videos?',
+        answer: 'After creating a story video, you\'ll see share buttons for various social media platforms. You can also copy a direct link to your video or download it to share manually. Premium plans include additional export options and the ability to schedule social media posts.'
       }
     ]
   };
