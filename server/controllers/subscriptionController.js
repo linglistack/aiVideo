@@ -1,6 +1,7 @@
 const Subscription = require('../models/Subscription');
 const User = require('../models/User');
 const stripeService = require('../services/stripeService');
+const paypalService = require('../services/paypalService');
 const Plan = require('../models/Plan');
 const aiUser = require('../models/aiUser');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
@@ -440,62 +441,32 @@ const createPaymentIntent = async (req, res) => {
       
       // Fetch user first to check current values
       const user = await aiUser.findById(req.user._id);
-      console.log('👤 USER BEFORE UPDATE:', {
-        id: user._id,
-        subscription: {
-          plan: user.subscription?.plan,
-          creditsTotal: user.subscription?.creditsTotal,
-          creditsUsed: user.subscription?.creditsUsed,
-        }
-      });
-      // Update using direct document manipulation instead of findByIdAndUpdate
-      user.subscription.plan = plan.name.toLowerCase();
-      user.subscription.creditsTotal = plan.creditsTotal;
-      user.subscription.cycleStartDate = cycleStartDate;
-      user.subscription.cycleEndDate = cycleEndDate;
-      user.subscription.endDate = endDate;
-      user.subscription.canceledAt = null;
       
-      // Explicitly set creditsUsed to 0 for new subscriptions
-      if (!user.subscription.creditsUsed) {
-        user.subscription.creditsUsed = 0;
-      }
-      
-      await user.save();
-      
-      // Verify the update was successful
-      const updatedUser = await aiUser.findById(req.user._id).lean();
-      console.log('👤 USER AFTER UPDATE:', {
-        id: updatedUser._id,
-        subscription: {
-          plan: updatedUser.subscription?.plan,
-          creditsTotal: updatedUser.subscription?.creditsTotal,
-          creditsUsed: updatedUser.subscription?.creditsUsed,
-        }
-      });
-      
-      // As a final fallback, if creditsTotal is still not correctly set,
-      // force an update directly to the specific field
-      if (!updatedUser.subscription?.creditsTotal || updatedUser.subscription.creditsTotal !== plan.creditsTotal) {
-        console.log('⚠️ SUBSCRIPTION CREDITS NOT UPDATED CORRECTLY, FORCING UPDATE');
-        
-        await aiUser.updateOne(
-          { _id: req.user._id }, 
-          { $set: { 'subscription.creditsTotal': plan.creditsTotal } },
-          { upsert: false }
-        );
-        
-        // Fetch again to verify
-        const finalUser = await aiUser.findById(req.user._id).lean();
-        console.log('👤 USER AFTER FORCED UPDATE:', {
-          id: finalUser._id,
-          subscription: {
-            plan: finalUser.subscription?.plan,
-            creditsTotal: finalUser.subscription?.creditsTotal,
-            creditsUsed: finalUser.subscription?.creditsUsed,
-          }
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found'
         });
       }
+      
+      // Update user's subscription info directly here for better traceability
+      user.subscription = {
+        plan: plan.name.toLowerCase(),
+        stripeSubscriptionId: subscription.id,
+        startDate: new Date(),
+        endDate,
+        cycleStartDate,
+        cycleEndDate,
+        creditsTotal: plan.creditsTotal,
+        creditsUsed: 0,
+        isActive: true,
+        billingCycle: isYearly ? 'yearly' : 'monthly',
+        paymentMethod: 'stripe',
+        paymentType: 'recurring',
+        priceId
+      };
+      
+      await user.save();
       
       // Create a payment record directly here, so we don't rely solely on the webhook
       try {
@@ -534,6 +505,7 @@ const createPaymentIntent = async (req, res) => {
           plan: plan.name,
           billingCycle: isYearly ? 'yearly' : 'monthly',
           status: 'succeeded',
+          paymentType: 'recurring',
           receiptUrl: subscription.latest_invoice?.hosted_invoice_url,
           paymentMethod: paymentMethodData,
           metadata: {
@@ -785,6 +757,7 @@ const handleInvoicePaymentSucceeded = async (invoice) => {
         plan: plan.name,
         billingCycle: isYearly ? 'yearly' : 'monthly',
         status: 'succeeded',
+        paymentType: 'recurring',
         receiptUrl: invoice.hosted_invoice_url || charge?.receipt_url,
         receiptNumber: invoice.number,
         paymentMethod: paymentMethodData,
@@ -1533,6 +1506,213 @@ const checkExpiredSubscriptionsEndpoint = async (req, res) => {
   }
 };
 
+// @desc    Create a PayPal subscription
+// @route   POST /api/subscriptions/paypal
+// @access  Private
+const createPaypalSubscription = async (req, res) => {
+  try {
+    const { planId, billingCycle, upgradeDetails } = req.body;
+    
+    // Validate inputs
+    if (!planId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Plan ID is required'
+      });
+    }
+    
+    // Get plan details from database
+    const plan = await Plan.findById(planId);
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        error: 'Plan not found'
+      });
+    }
+    
+    const user = await aiUser.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Determine price based on billing cycle
+    const price = billingCycle === 'yearly' ? plan.yearlyPrice : plan.monthlyPrice;
+    
+    // Create PayPal subscription data
+    const subscriptionData = {
+      plan_id: process.env.NODE_ENV === 'production' 
+        ? plan.paypalPlanIdProd 
+        : plan.paypalPlanIdTest,
+      subscriber: {
+        name: {
+          given_name: user.name.split(' ')[0] || '',
+          surname: user.name.split(' ').slice(1).join(' ') || ''
+        },
+        email_address: user.email
+      },
+      application_context: {
+        brand_name: 'AI Video',
+        shipping_preference: 'NO_SHIPPING',
+        user_action: 'SUBSCRIBE_NOW',
+        return_url: `${process.env.CLIENT_URL}/payment-success`,
+        cancel_url: `${process.env.CLIENT_URL}/payment-cancel`
+      }
+    };
+    
+    // Create subscription in PayPal
+    const paypalSubscription = await paypalService.createSubscription(subscriptionData);
+    
+    // Return the subscription ID and approval URL
+    res.status(201).json({
+      success: true,
+      subscriptionId: paypalSubscription.id,
+      approvalUrl: paypalSubscription.links.find(link => link.rel === 'approve').href
+    });
+  } catch (error) {
+    console.error('Error creating PayPal subscription:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
+// @desc    Confirm PayPal subscription
+// @route   POST /api/subscriptions/paypal/confirm
+// @access  Private
+const confirmPaypalSubscription = async (req, res) => {
+  try {
+    const { subscriptionId, planId, billingCycle } = req.body;
+    
+    if (!subscriptionId || !planId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Subscription ID and Plan ID are required'
+      });
+    }
+    
+    // Get plan details
+    const plan = await Plan.findById(planId);
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        error: 'Plan not found'
+      });
+    }
+    
+    // Get subscription details from PayPal
+    const paypalSubscriptionDetails = await paypalService.getSubscription(subscriptionId);
+    
+    if (paypalSubscriptionDetails.status !== 'ACTIVE' && 
+        paypalSubscriptionDetails.status !== 'APPROVED') {
+      return res.status(400).json({
+        success: false,
+        error: `Subscription is not active. Status: ${paypalSubscriptionDetails.status}`
+      });
+    }
+    
+    const user = await aiUser.findById(req.user._id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Calculate dates
+    const startDate = new Date();
+    const endDate = new Date();
+    
+    // Add 1 month or 1 year based on billing cycle
+    if (billingCycle === 'yearly') {
+      endDate.setFullYear(endDate.getFullYear() + 1);
+    } else {
+      endDate.setMonth(endDate.getMonth() + 1);
+    }
+    
+    // Check if user already has an active subscription and update it
+    let subscription = await Subscription.findOne({
+      user: req.user._id,
+      status: 'active'
+    });
+    
+    if (subscription) {
+      // Update the existing subscription
+      subscription.plan = plan.name;
+      subscription.startDate = startDate;
+      subscription.endDate = endDate;
+      subscription.paymentMethod = 'paypal';
+      subscription.paypalSubscriptionId = subscriptionId;
+      subscription.billingCycle = billingCycle;
+      subscription.creditsTotal = plan.creditLimit;
+      subscription.creditsUsed = 0; // Reset on upgrade
+      subscription.status = 'active';
+      
+      await subscription.save();
+    } else {
+      // Create a new subscription
+      subscription = await Subscription.create({
+        user: req.user._id,
+        plan: plan.name,
+        startDate,
+        endDate,
+        paymentMethod: 'paypal',
+        paypalSubscriptionId: subscriptionId,
+        billingCycle,
+        creditsTotal: plan.creditLimit,
+        creditsUsed: 0,
+        status: 'active'
+      });
+    }
+    
+    // Update user's subscription info
+    user.subscription = {
+      plan: plan.name,
+      isActive: true,
+      startDate,
+      endDate,
+      creditsTotal: plan.creditLimit,
+      creditsUsed: 0,
+      billingCycle,
+      paymentMethod: 'paypal',
+      paypalSubscriptionId: subscriptionId
+    };
+    
+    await user.save();
+    
+    // Create a payment record
+    await Payment.create({
+      user: req.user._id,
+      amount: billingCycle === 'yearly' ? plan.yearlyPrice : plan.monthlyPrice,
+      currency: 'USD',
+      paymentMethod: 'paypal',
+      paymentMethodId: subscriptionId,
+      description: `${plan.name} Plan (${billingCycle})`,
+      status: 'succeeded',
+      paymentType: 'recurring',
+      receiptUrl: null,
+      metadata: {
+        description: `Subscription to ${plan.name} plan (${billingCycle})`,
+        createdManually: true
+      }
+    });
+    
+    res.status(200).json({
+      success: true,
+      subscription
+    });
+  } catch (error) {
+    console.error('Error confirming PayPal subscription:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Server error'
+    });
+  }
+};
+
 module.exports = { 
   createSubscription, 
   getCurrentSubscription, 
@@ -1551,5 +1731,7 @@ module.exports = {
   useCredit,
   resetUserCycle,
   fixSubscriptionCredits,
-  checkExpiredSubscriptionsEndpoint
+  checkExpiredSubscriptionsEndpoint,
+  createPaypalSubscription,
+  confirmPaypalSubscription
 }; 

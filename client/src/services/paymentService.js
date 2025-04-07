@@ -6,6 +6,8 @@ const API_URL = config.apiBaseUrl;
 // Add a payment method
 export const savePaymentMethod = async (paymentData, token) => {
   try {
+    console.log('Saving payment method:', paymentData);
+    
     const config = {
       headers: {
         'Content-Type': 'application/json',
@@ -19,21 +21,7 @@ export const savePaymentMethod = async (paymentData, token) => {
       config
     );
 
-    // If successful, also save to localStorage to ensure persistence
-    if (response.data.success && response.data.paymentMethod) {
-      try {
-        const userString = localStorage.getItem('user');
-        if (userString) {
-          const userData = JSON.parse(userString);
-          userData.paymentMethod = response.data.paymentMethod;
-          localStorage.setItem('user', JSON.stringify(userData));
-          console.log('Payment method saved to localStorage');
-        }
-      } catch (err) {
-        console.error('Error saving payment method to localStorage:', err);
-      }
-    }
-
+    // Just return the response data - no localStorage updates
     return response.data;
   } catch (error) {
     console.error('Payment method save error:', error.response?.data || error.message);

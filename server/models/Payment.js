@@ -47,6 +47,11 @@ const paymentSchema = new mongoose.Schema({
     enum: ['succeeded', 'pending', 'failed'],
     default: 'pending'
   },
+  paymentType: {
+    type: String,
+    enum: ['recurring', 'one-time'],
+    default: 'recurring'
+  },
   receiptUrl: {
     type: String
   },
@@ -59,6 +64,15 @@ const paymentSchema = new mongoose.Schema({
     last4: String,
     expMonth: String,
     expYear: String
+  },
+  paypalPayerID: {
+    type: String
+  },
+  paypalBillingToken: {
+    type: String
+  },
+  paypalEmail: {
+    type: String
   },
   metadata: {
     type: Object

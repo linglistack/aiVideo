@@ -118,7 +118,8 @@ const createSubscription = async (userId, priceId, paymentMethodId, saveMethod =
         'subscription.billingCycle': isYearly ? 'yearly' : 'monthly',
         'subscription.price': isYearly ? plan.yearlyPrice / 12 : plan.monthlyPrice, // monthly equivalent price
         'subscription.actualPrice': isYearly ? plan.yearlyPrice : plan.monthlyPrice, // actual charged price
-        'subscription.priceId': priceId
+        'subscription.priceId': priceId,
+        'subscription.paymentType': 'recurring' // Explicitly mark as recurring
       };
       
       // If saveMethod is true, also save the payment method to the user model

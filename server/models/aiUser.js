@@ -49,6 +49,10 @@ const aiUserSchema = new mongoose.Schema({
     expMonth: String,
     expYear: String,
     nameOnCard: String,
+    isDefault: {
+      type: Boolean,
+      default: false
+    },
     createdAt: {
       type: Date,
       default: Date.now
@@ -61,6 +65,18 @@ const aiUserSchema = new mongoose.Schema({
       default: 'free'
     },
     stripeSubscriptionId: {
+      type: String
+    },
+    paypalSubscriptionId: {
+      type: String
+    },
+    paypalPayerID: {
+      type: String
+    },
+    paypalBillingToken: {
+      type: String
+    },
+    paypalEmail: {
       type: String
     },
     startDate: {
@@ -90,6 +106,16 @@ const aiUserSchema = new mongoose.Schema({
     billingCycle: {
       type: String,
       enum: ['monthly', 'yearly', 'none'],
+      default: 'none'
+    },
+    paymentMethod: {
+      type: String,
+      enum: ['stripe', 'paypal', 'manual', 'none'],
+      default: 'none'
+    },
+    paymentType: {
+      type: String,
+      enum: ['recurring', 'one-time', 'none'],
       default: 'none'
     },
     canceledAt: {

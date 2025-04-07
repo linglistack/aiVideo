@@ -35,11 +35,42 @@ const subscriptionSchema = new mongoose.Schema({
       }
     }
   },
-  isActive: {
-    type: Boolean,
-    default: true
+  status: {
+    type: String,
+    enum: ['active', 'cancelled', 'expired'],
+    default: 'active'
   },
   paymentId: {
+    type: String
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['stripe', 'paypal', 'manual'],
+    default: 'manual'
+  },
+  paymentType: {
+    type: String,
+    enum: ['recurring', 'one-time'],
+    default: 'recurring'
+  },
+  billingCycle: {
+    type: String,
+    enum: ['monthly', 'yearly', 'none'],
+    default: 'none'
+  },
+  stripeSubscriptionId: {
+    type: String
+  },
+  paypalSubscriptionId: {
+    type: String
+  },
+  paypalPayerID: {
+    type: String
+  },
+  paypalBillingToken: {
+    type: String
+  },
+  paypalEmail: {
     type: String
   },
   createdAt: {

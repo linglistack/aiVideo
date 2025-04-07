@@ -47,7 +47,7 @@ const savePaymentHistoryToDatabase = async (userId, paymentId, paymentData) => {
  */
 router.post('/methods', protect, async (req, res) => {
   try {
-    const { id, type, brand, last4, expMonth, expYear, nameOnCard } = req.body;
+    const { id, type, brand, last4, expMonth, expYear, nameOnCard, isDefault } = req.body;
     
     // Basic validation
     if (!type || !brand || !last4) {
@@ -57,23 +57,31 @@ router.post('/methods', protect, async (req, res) => {
       });
     }
     
-    // Validate payment method ID - it must be a real Stripe payment method ID
-    if (!id || !id.startsWith('pm_')) {
+    // Validate payment method ID - it must be a real Stripe payment method ID for card payments
+    // PayPal payments don't need a Stripe payment method ID
+    if (type !== 'paypal' && (!id || !id.startsWith('pm_'))) {
       return res.status(400).json({
         success: false,
         error: 'Invalid payment method ID format. Must be a valid Stripe payment method ID.'
       });
     }
     
+    // Generate a unique ID for PayPal if not provided
+    const paymentMethodId = type === 'paypal' && !id ? 
+      `pp_${Date.now()}_${Math.random().toString(36).substring(2, 10)}` : 
+      id;
+    
     // Format the payment method for storage
     const paymentMethod = {
-      id, // Must be a valid Stripe payment method ID (starts with pm_)
+      id: paymentMethodId, // Use the generated ID for PayPal if needed
       type,
       brand,
       last4,
       expMonth,
       expYear,
+      email: req.body.email, // Add email for PayPal methods
       nameOnCard: nameOnCard || req.user.name,
+      isDefault: isDefault === true ? true : false, // Respect explicit isDefault flag, default to false
       createdAt: new Date()
     };
     
@@ -92,7 +100,22 @@ router.post('/methods', protect, async (req, res) => {
       user.paymentMethods = [];
     }
     
-    // Check if this payment method already exists
+    // First check for duplicate PayPal accounts or cards with same last4 and brand
+    const isDuplicate = user.paymentMethods.some(method => 
+      (method.type === 'paypal' && type === 'paypal' && method.email === req.body.email) ||
+      (method.type === 'card' && type === 'card' && method.brand === brand && method.last4 === last4)
+    );
+    
+    // If it's a duplicate, don't save but don't return an error
+    if (isDuplicate) {
+      return res.status(200).json({
+        success: true,
+        message: 'Payment method already exists',
+        paymentMethod: paymentMethod
+      });
+    }
+    
+    // Check if this exact payment method ID already exists
     const existingMethodIndex = user.paymentMethods.findIndex(
       pm => pm.id === paymentMethod.id
     );
@@ -108,18 +131,53 @@ router.post('/methods', protect, async (req, res) => {
       user.paymentMethods.push(paymentMethod);
     }
     
-    // Set as default payment method
-    user.paymentMethod = paymentMethod;
+    // If this payment method should be set as default (explicitly requested or following rules)
+    if (paymentMethod.isDefault || (type === 'card' && !user.paymentMethod)) {
+      // First, reset any existing default methods
+      user.paymentMethods.forEach(method => {
+        if (method.id !== paymentMethodId) {
+          method.isDefault = false;
+        }
+      });
+      
+      // Set new method as default (redundant if paymentMethod.isDefault is already true,
+      // but ensures consistent state)
+      const methodToMakeDefault = existingMethodIndex !== -1 
+        ? user.paymentMethods[existingMethodIndex] 
+        : user.paymentMethods[user.paymentMethods.length - 1];
+        
+      // Explicitly set isDefault to true
+      methodToMakeDefault.isDefault = true;
+      
+      // Verify it's set in the database object
+      console.log('Setting default payment method:', {
+        id: methodToMakeDefault.id,
+        isDefault: methodToMakeDefault.isDefault
+      });
+      
+      user.paymentMethod = methodToMakeDefault;
+      user.defaultPaymentMethodId = paymentMethodId;
+    }
     
     // Save to database
     await user.save();
+    
+    // Log payment method details for debugging
+    console.log('Saved payment method with details:', {
+      id: paymentMethod.id,
+      isDefault: paymentMethod.isDefault,
+      paymentMethodInUser: user.paymentMethods.find(m => m.id === paymentMethod.id)?.isDefault,
+      defaultMethodId: user.defaultPaymentMethodId
+    });
     
     // Update user object in request for subsequent middleware
     req.user = user;
     
     res.status(201).json({
       success: true,
-      paymentMethod: paymentMethod
+      paymentMethod: paymentMethod,
+      defaultMethod: user.paymentMethod,
+      isDefault: paymentMethod.isDefault
     });
   } catch (error) {
     console.error('Save payment method error:', error);
@@ -150,15 +208,37 @@ router.get('/methods', protect, async (req, res) => {
     // Return user's payment methods
     const userPaymentMethods = user.paymentMethods || [];
     
+    // Mark default payment method in the returned array
+    const methodsWithDefaultFlag = userPaymentMethods.map(method => {
+      // Make sure to preserve the isDefault property
+      const methodObj = method.toObject ? method.toObject() : { ...method };
+      return {
+        ...methodObj,
+        isDefault: method.isDefault === true
+      };
+    });
+    
+    // Log payment methods for debugging
+    console.log('Returning payment methods to client:', {
+      count: methodsWithDefaultFlag.length,
+      methods: methodsWithDefaultFlag.map(m => ({
+        id: m.id,
+        isDefault: m.isDefault
+      })),
+      defaultMethodId: user.defaultPaymentMethodId
+    });
+    
     res.json({
       success: true,
-      methods: userPaymentMethods
+      methods: methodsWithDefaultFlag,
+      defaultMethod: user.paymentMethod,
+      defaultPaymentMethodId: user.defaultPaymentMethodId
     });
   } catch (error) {
-    console.error('Get payment methods error:', error);
+    console.error('Error getting payment methods:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to retrieve payment methods'
+      error: 'Failed to get payment methods'
     });
   }
 });
@@ -208,6 +288,20 @@ router.delete('/methods/:id', protect, async (req, res) => {
       user.paymentMethod = user.paymentMethods.length > 0 
         ? user.paymentMethods[0]  // Set first remaining as default
         : null;                   // Or null if none left
+      
+      // Also update the ID reference
+      user.defaultPaymentMethodId = user.paymentMethod ? user.paymentMethod.id : null;
+      
+      // If we have remaining methods, set a new default
+      if (user.paymentMethods.length > 0) {
+        // First remove isDefault from all
+        user.paymentMethods.forEach(method => {
+          method.isDefault = false;
+        });
+        
+        // Set the first one as default
+        user.paymentMethods[0].isDefault = true;
+      }
     }
     
     // Save changes to database
@@ -315,6 +409,12 @@ router.put('/methods/default', protect, async (req, res) => {
       });
     }
     
+    // Reset all payment methods isDefault flag
+    user.paymentMethods.forEach(method => {
+      method.isDefault = false;
+    });
+    
+    // Find and mark the selected method as default
     const paymentMethod = user.paymentMethods.find(method => method.id === methodId);
     
     if (!paymentMethod) {
@@ -325,7 +425,17 @@ router.put('/methods/default', protect, async (req, res) => {
     }
     
     // Set as default payment method
+    paymentMethod.isDefault = true;
+    
+    // Verify it's set in the database object
+    console.log('Setting default payment method:', {
+      id: paymentMethod.id,
+      isDefault: paymentMethod.isDefault,
+      paymentMethodInDb: user.paymentMethods.find(m => m.id === methodId)?.isDefault
+    });
+    
     user.paymentMethod = paymentMethod;
+    user.defaultPaymentMethodId = methodId; // Store ID separately for consistent reference
     
     // Save to database
     await user.save();
@@ -336,7 +446,8 @@ router.put('/methods/default', protect, async (req, res) => {
     res.json({
       success: true,
       message: 'Default payment method updated successfully',
-      paymentMethod
+      paymentMethod,
+      isDefault: true
     });
   } catch (error) {
     console.error('Set default payment method error:', error);
@@ -394,7 +505,24 @@ router.post('/methods/sync', protect, async (req, res) => {
     
     // If the default payment method is invalid, update it
     if (user.paymentMethod && !validMethodIds.includes(user.paymentMethod.id)) {
-      user.paymentMethod = validPaymentMethods.length > 0 ? validPaymentMethods[0] : null;
+      // Find methods that have isDefault set to true
+      const previousDefaults = validPaymentMethods.filter(m => m.isDefault);
+      
+      // Reset all payment methods to not be default
+      validPaymentMethods.forEach(method => {
+        method.isDefault = false;
+      });
+      
+      // Set a new default
+      if (validPaymentMethods.length > 0) {
+        const newDefault = validPaymentMethods[0];
+        newDefault.isDefault = true;
+        user.paymentMethod = newDefault;
+        user.defaultPaymentMethodId = newDefault.id;
+      } else {
+        user.paymentMethod = null;
+        user.defaultPaymentMethodId = null;
+      }
     }
     
     // Save to database

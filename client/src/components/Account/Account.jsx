@@ -142,15 +142,27 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
           const paymentResponse = await getPaymentMethods(user.token);
           if (paymentResponse.success && paymentResponse.methods) {
             console.log('Payment methods fetched:', paymentResponse.methods);
-            setPaymentMethods(paymentResponse.methods);
             
-            // If we have payment methods, update the user object
-            if (paymentResponse.methods.length > 0) {
+            // Get methods with isDefault flag from the backend
+            const methods = paymentResponse.methods;
+            
+            // Use the methods directly from the server response
+            setPaymentMethods(methods);
+            
+            // Update user state with payment methods and default from server
+            if (methods.length > 0) {
+              // Find default method from the isDefault flag or defaultPaymentMethodId
+              const defaultMethod = methods.find(m => m.isDefault) || 
+                                  (paymentResponse.defaultPaymentMethodId && 
+                                    methods.find(m => m.id === paymentResponse.defaultPaymentMethodId)) ||
+                                  methods[0];
+              
               // Update app state with the payment methods
               setUser(prevUser => ({
                 ...prevUser,
-                paymentMethod: paymentResponse.methods[0],
-                paymentMethods: paymentResponse.methods
+                paymentMethod: defaultMethod,
+                paymentMethods: methods,
+                defaultPaymentMethodId: paymentResponse.defaultPaymentMethodId || defaultMethod.id
               }));
             }
           }
@@ -280,11 +292,6 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
   
   // Fetch payment methods from server
   const fetchPaymentMethods = async () => {
-    // If we already have payment methods in state, don't refetch
-    if (paymentMethods && paymentMethods.length > 0) {
-      return;
-    }
-    
     try {
       // Use the user prop directly instead of localStorage
       if (!user?.token) {
@@ -299,14 +306,26 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       
       if (response.success && response.methods) {
         console.log('Payment methods fetched:', response.methods);
-        setPaymentMethods(response.methods);
         
-        // Update user state if we have payment methods
-        if (response.methods.length > 0) {
+        // Get methods with isDefault flag from the backend
+        const methods = response.methods;
+        
+        // Use the methods directly from the server response
+        setPaymentMethods(methods);
+        
+        // Update user state with payment methods and default from server
+        if (methods.length > 0) {
+          // Find default method from the isDefault flag or defaultPaymentMethodId
+          const defaultMethod = methods.find(m => m.isDefault) || 
+                                (response.defaultPaymentMethodId && 
+                                  methods.find(m => m.id === response.defaultPaymentMethodId)) ||
+                                methods[0];
+          
           setUser(prevUser => ({
             ...prevUser,
-            paymentMethod: response.methods[0],
-            paymentMethods: response.methods
+            paymentMethod: defaultMethod,
+            paymentMethods: methods,
+            defaultPaymentMethodId: response.defaultPaymentMethodId || defaultMethod.id
           }));
         }
       } else {
@@ -583,6 +602,10 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // Call API to delete the payment method
       await deletePaymentMethod(methodId, user.token);
       
+      // Check if the deleted method was default
+      const deletedMethodWasDefault = user.paymentMethods?.find(m => m.id === methodId)?.isDefault ||
+                                     (user.paymentMethod?.id === methodId);
+      
       // Update the user object to remove the payment method
       const updatedPaymentMethods = user.paymentMethods ? 
         user.paymentMethods.filter(method => method.id !== methodId) : 
@@ -591,7 +614,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // If deleting the default payment method, set a new default if available
       let updatedDefaultPaymentMethod = user.paymentMethod;
       
-      if (updatedDefaultPaymentMethod && updatedDefaultPaymentMethod.id === methodId) {
+      if (deletedMethodWasDefault || (updatedDefaultPaymentMethod && updatedDefaultPaymentMethod.id === methodId)) {
         updatedDefaultPaymentMethod = updatedPaymentMethods.length > 0 ? 
           updatedPaymentMethods[0] : 
           null;
@@ -599,7 +622,13 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         // Also update the default in the database
         if (updatedDefaultPaymentMethod) {
           try {
-            await setDefaultPaymentMethod(updatedDefaultPaymentMethod.id, user.token);
+            const response = await setDefaultPaymentMethod(updatedDefaultPaymentMethod.id, user.token);
+            if (response.success) {
+              // Update isDefault flags
+              updatedPaymentMethods.forEach(m => {
+                m.isDefault = m.id === updatedDefaultPaymentMethod.id;
+              });
+            }
           } catch (error) {
             console.error('Error setting new default payment method:', error);
             // Continue anyway
@@ -614,14 +643,15 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       setUser(prevUser => ({
         ...prevUser,
         paymentMethod: updatedDefaultPaymentMethod,
-        paymentMethods: updatedPaymentMethods
+        paymentMethods: updatedPaymentMethods,
+        defaultPaymentMethodId: updatedDefaultPaymentMethod?.id || null
       }));
       
       setSuccess('Payment method deleted successfully');
       setShowDeletePaymentModal(false);
     } catch (error) {
+      console.error('Error deleting payment method:', error);
       setError('Failed to delete payment method. Please try again.');
-      console.error(error);
     } finally {
       setProcessingCard(false);
     }
@@ -701,13 +731,17 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       } 
       // Active subscription
       else if (subscription.isActive) {
+        // Determine if this is recurring or one-time based on paymentType
+        const isRecurring = subscription.paymentType === 'recurring';
+        
         return {
           status: 'active',
-          statusText: 'Active',
+          statusText: `Active${isRecurring ? '' : ' (one-time)'}`,
           statusClass: 'bg-green-500/20 text-green-500',
-          showCancelButton: true,
-          accessEndsLabel: 'Next Billing Date',
-          nextDateLabel: 'Next Billing Date'
+          showCancelButton: isRecurring, // Only show cancel button for recurring subscriptions
+          accessEndsLabel: isRecurring ? 'Next Billing Date' : 'Access Until',
+          nextDateLabel: isRecurring ? 'Next Billing Date' : 'Access Until',
+          isRecurring
         };
       }
       // Inactive subscription (free tier or expired)
@@ -1503,7 +1537,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                 <PaymentMethodCard
                   key={index}
                   paymentMethod={method}
-                  isDefault={user.paymentMethod && user.paymentMethod.id === method.id}
+                  isDefault={method.isDefault || (user.paymentMethod && user.paymentMethod.id === method.id)}
                   onDelete={() => handleDeletePaymentMethod(method.id)}
                   onMakeDefault={() => handleMakeDefaultPaymentMethod(method)}
                 />
@@ -1546,9 +1580,9 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                 <FaCcAmex className="text-blue-600 text-2xl mr-2" />
                 <FaCcDiscover className="text-orange-500 text-2xl" />
               </div>
-              <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
+              {/* <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center justify-center">
                 <FaPaypal className="text-blue-500 text-2xl" />
-              </div>
+              </div> */}
               <div className="bg-gray-900 px-4 py-2 rounded-lg flex items-center">
                 <svg viewBox="0 0 24 24" className="h-6 mr-2" fill="white">
                   <path d="M17.05 12.536c-.021-2.307 1.894-3.41 1.98-3.467-1.077-1.577-2.757-1.792-3.353-1.818-1.428-.145-2.79.84-3.511.84-.723 0-1.84-.82-3.026-.797-1.558.022-2.994.906-3.797 2.3-1.616 2.802-.413 6.934 1.161 9.204.77 1.112 1.687 2.358 2.888 2.313 1.16-.046 1.597-.75 2.996-.75 1.401 0 1.795.75 3.025.726 1.249-.02 2.04-1.137 2.803-2.253.884-1.29 1.248-2.543 1.269-2.607-.029-.013-2.435-.935-2.459-3.703z"/>
@@ -1874,7 +1908,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               <PaymentMethodCard
                 key={index}
                 paymentMethod={method}
-                isDefault={user.paymentMethod && user.paymentMethod.id === method.id}
+                isDefault={method.isDefault || (user.paymentMethod && user.paymentMethod.id === method.id)}
                 onDelete={() => handleDeletePaymentMethod(method.id)}
                 onMakeDefault={() => handleMakeDefaultPaymentMethod(method)}
               />
@@ -2003,7 +2037,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         last4: paymentMethod.card.last4,
         expMonth: paymentMethod.card.exp_month.toString(),
         expYear: paymentMethod.card.exp_year.toString().slice(-2), // Save last 2 digits
-        nameOnCard: cardData.nameOnCard
+        nameOnCard: cardData.nameOnCard,
+        isDefault: true // Always set new cards as default
       };
       
       // Save to our database
@@ -2016,21 +2051,40 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // Use the returned payment method
       const newPaymentMethod = response.paymentMethod;
       
+      // Ensure the new payment method is set as default in the database
+      try {
+        await setDefaultPaymentMethod(newPaymentMethod.id, user.token);
+      } catch (defaultError) {
+        console.error('Error setting card as default:', defaultError);
+        // Continue even if setting default fails
+      }
+      
       // Update the paymentMethods state
-      setPaymentMethods(prevMethods => [...(prevMethods || []), newPaymentMethod]);
+      setPaymentMethods(prevMethods => {
+        // Set all existing methods to not be default
+        const updatedMethods = prevMethods ? 
+          prevMethods.map(m => ({...m, isDefault: false})) : 
+          [];
+        
+        // Add new method as the default
+        return [...updatedMethods, {...newPaymentMethod, isDefault: true}];
+      });
       
       // Update user state with the functional pattern
       setUser(prevUser => {
-        // Create a copy of the payment methods or initialize if not exists
-        const updatedPaymentMethods = [...(prevUser.paymentMethods || []), newPaymentMethod];
+        // Create a copy of the payment methods with isDefault = false
+        const existingMethods = prevUser.paymentMethods ? 
+          prevUser.paymentMethods.map(m => ({...m, isDefault: false})) : 
+          [];
         
-        // Set as default if there are no other payment methods
-        const shouldBeDefault = !prevUser.paymentMethod;
+        // Add new payment method with isDefault = true
+        const updatedPaymentMethods = [...existingMethods, {...newPaymentMethod, isDefault: true}];
         
         return {
           ...prevUser,
-          paymentMethod: shouldBeDefault ? newPaymentMethod : prevUser.paymentMethod,
-          paymentMethods: updatedPaymentMethods
+          paymentMethod: newPaymentMethod, // Always set as the default
+          paymentMethods: updatedPaymentMethods,
+          defaultPaymentMethodId: newPaymentMethod.id
         };
       });
       
@@ -2077,68 +2131,67 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
     try {
       setProcessingCard(true);
       
-      // We need to create a dummy Stripe payment method for PayPal
-      // In production, you would integrate with PayPal's API directly
-      const stripe = await stripePromise;
-      
-      if (!stripe) {
-        throw new Error('Failed to load Stripe');
+      if (!paypalData.email) {
+        throw new Error('PayPal email is required');
       }
       
-      // For this example, we'll create a simple card payment method in test mode
-      // In production, you should create a proper PayPal payment method or source
-      const { error, paymentMethod } = await stripe.createPaymentMethod({
-        type: 'card',
-        card: {
-          number: '4242424242424242', // Test card number
-          exp_month: 12,
-          exp_year: 2030,
-          cvc: '123'
-        },
-        billing_details: {
-          name: user.name,
-          email: paypalData.email || user.email
-        }
-      });
-      
-      if (error) {
-        throw new Error('Failed to create PayPal payment method: ' + error.message);
-      }
+      console.log('Adding PayPal account with email:', paypalData.email);
       
       // Format the payment method data for storage
       const paymentMethodData = {
-        id: paymentMethod.id, // Use Stripe's payment method ID
         type: 'paypal',
         brand: 'paypal',
         last4: 'PYPL',
-        email: paypalData.email || user.email
+        email: paypalData.email || user.email,
+        isDefault: true // Always set new PayPal accounts as default
       };
       
-      // Save to the database first
+      // Save to the database
       const response = await savePaymentMethod(paymentMethodData, user.token);
       
       if (!response.success) {
         throw new Error(response.error || 'Failed to save PayPal account');
       }
       
+      console.log('PayPal account added successfully:', response.paymentMethod);
+      
       // Use the returned payment method with server-generated ID
       const newPaymentMethod = response.paymentMethod;
       
+      // Ensure the new payment method is set as default in the database
+      try {
+        await setDefaultPaymentMethod(newPaymentMethod.id, user.token);
+      } catch (defaultError) {
+        console.error('Error setting PayPal as default:', defaultError);
+        // Continue even if setting default fails
+      }
+      
       // Update the payment methods state
-      setPaymentMethods(prevMethods => [...(prevMethods || []), newPaymentMethod]);
+      setPaymentMethods(prevMethods => {
+        // Set all existing methods to not be default
+        const updatedMethods = prevMethods ? 
+          prevMethods.map(m => ({...m, isDefault: false})) : 
+          [];
+        
+        // Add new method as the default
+        return [...updatedMethods, {...newPaymentMethod, isDefault: true}];
+      });
       
       // Update user state with the functional pattern
       setUser(prevUser => {
-        // Create a copy of the payment methods or initialize if not exists
-        const updatedPaymentMethods = [...(prevUser.paymentMethods || []), newPaymentMethod];
+        // Create a copy of the payment methods with isDefault = false
+        const existingMethods = prevUser.paymentMethods ? 
+          prevUser.paymentMethods.map(m => ({...m, isDefault: false})) : 
+          [];
         
-        // Set as default if there are no other payment methods
-        const shouldBeDefault = !prevUser.paymentMethod;
+        // Add new payment method with isDefault = true
+        const updatedPaymentMethods = [...existingMethods, {...newPaymentMethod, isDefault: true}];
         
         return {
           ...prevUser,
-          paymentMethod: shouldBeDefault ? newPaymentMethod : prevUser.paymentMethod,
-          paymentMethods: updatedPaymentMethods
+          paymentMethod: newPaymentMethod, // Always set as the default
+          paymentMethods: updatedPaymentMethods,
+          defaultPaymentMethodId: newPaymentMethod.id
         };
       });
       
@@ -2165,7 +2218,11 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       const methodId = typeof method === 'string' ? method : method.id;
 
       // Call API to set the default payment method
-      await setDefaultPaymentMethod(methodId, user.token);
+      const response = await setDefaultPaymentMethod(methodId, user.token);
+      
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to set default payment method');
+      }
       
       // Find the full method object if we only have the ID
       const methodObj = typeof method === 'string' 
@@ -2176,19 +2233,32 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         throw new Error('Payment method not found');
       }
       
-      // Update the user state with the functional pattern
-      setUser(prevUser => ({
-        ...prevUser,
-        paymentMethod: methodObj
-      }));
-      
-      // Update the paymentMethods state to mark this method as default
-      // This ensures the UI updates immediately
+      // Update the paymentMethods state to mark this method as default and others as non-default
       if (paymentMethods && paymentMethods.length > 0) {
-        // Create a new array with the same payment methods
-        // This will trigger a re-render
-        setPaymentMethods([...paymentMethods]);
+        setPaymentMethods(prevMethods => {
+          return prevMethods.map(m => ({
+            ...m,
+            isDefault: m.id === methodId
+          }));
+        });
       }
+      
+      // Update the user state with the functional pattern
+      setUser(prevUser => {
+        // Create updated paymentMethods with correct isDefault flags
+        const updatedPaymentMethods = prevUser.paymentMethods 
+          ? prevUser.paymentMethods.map(m => ({
+              ...m,
+              isDefault: m.id === methodId
+            }))
+          : [];
+        
+        return {
+          ...prevUser,
+          paymentMethod: methodObj,
+          paymentMethods: updatedPaymentMethods
+        };
+      });
       
       setSuccess('Payment method set as default');
     } catch (error) {
@@ -2216,6 +2286,10 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       // Call API to delete the payment method
       await deletePaymentMethod(methodId, user.token);
       
+      // Check if the deleted method was default
+      const deletedMethodWasDefault = user.paymentMethods?.find(m => m.id === methodId)?.isDefault ||
+                                     (user.paymentMethod?.id === methodId);
+      
       // Update the payment methods state directly
       setPaymentMethods(prevMethods => {
         if (!prevMethods) return [];
@@ -2229,7 +2303,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         
       // Handle default payment method if needed
       let updatedDefaultPaymentMethod = user.paymentMethod;
-      if (updatedDefaultPaymentMethod && updatedDefaultPaymentMethod.id === methodId) {
+      if (deletedMethodWasDefault || (updatedDefaultPaymentMethod && updatedDefaultPaymentMethod.id === methodId)) {
         updatedDefaultPaymentMethod = updatedPaymentMethods.length > 0 ? 
           updatedPaymentMethods[0] : 
           null;
@@ -2237,7 +2311,13 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         // Also update the default in the database if we have a new default
         if (updatedDefaultPaymentMethod) {
           try {
-            await setDefaultPaymentMethod(updatedDefaultPaymentMethod.id, user.token);
+            const response = await setDefaultPaymentMethod(updatedDefaultPaymentMethod.id, user.token);
+            if (response.success) {
+              // Update isDefault flags
+              updatedPaymentMethods.forEach(m => {
+                m.isDefault = m.id === updatedDefaultPaymentMethod.id;
+              });
+            }
           } catch (error) {
             console.error('Error setting new default payment method:', error);
             // Continue anyway
@@ -2249,7 +2329,8 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
       setUser(prevUser => ({
         ...prevUser,
         paymentMethod: updatedDefaultPaymentMethod,
-        paymentMethods: updatedPaymentMethods
+        paymentMethods: updatedPaymentMethods,
+        defaultPaymentMethodId: updatedDefaultPaymentMethod?.id || null
       }));
       
       // Close modal and show success
@@ -2402,7 +2483,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               ) : (
                 <p className="font-medium">•••• •••• •••• {paymentMethod.last4}</p>
               )}
-              {isDefault && (
+              {(paymentMethod.isDefault || isDefault) && (
                 <span className="ml-2 px-2 py-0.5 bg-green-500/20 text-green-500 text-xs rounded-full">
                   Default
                 </span>
@@ -2425,7 +2506,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
         </div>
         
         <div className="flex items-center gap-2 md:gap-4 mt-2 md:mt-0">
-          {!isDefault && (
+          {!(paymentMethod.isDefault || isDefault) && (
             <button 
               onClick={onMakeDefault}
               className="py-2 px-3 rounded-lg text-white bg-gray-700 hover:bg-gray-600 transition-colors text-sm"
@@ -2540,17 +2621,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             >
               Credit / Debit Card
             </button>
-            <button
-              onClick={() => setActiveTab('paypal')}
-              className={`px-4 py-2 font-medium text-sm ${
-                activeTab === 'paypal' 
-                  ? 'text-tiktok-pink border-b-2 border-tiktok-pink' 
-                  : 'text-gray-400 hover:text-white'
-                }`}
-              disabled={processingCard}
-            >
-              PayPal
-            </button>
+            
           </div>
           
           {/* Credit Card Form */}
@@ -2625,11 +2696,14 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
             <form onSubmit={handlePaypalSubmit}>
               <div className="space-y-4">
                 <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-4 mb-4 flex items-center">
-                  <div>
-                    <h3 className="text-white font-medium mb-1">Link Your PayPal Account</h3>
-                    <p className="text-gray-400 text-sm">
-                      Simply enter your PayPal email address to link your account
-                    </p>
+                  <div className="flex items-center">
+                    <FaPaypal className="text-[#0079C1] text-3xl mr-3" />
+                    <div>
+                      <h3 className="text-white font-medium mb-1">Link Your PayPal Account</h3>
+                      <p className="text-gray-400 text-sm">
+                        Enter your PayPal email address to connect your account
+                      </p>
+                    </div>
                   </div>
                 </div>
                 
@@ -2641,7 +2715,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                     type="email"
                     value={paypalEmail}
                     onChange={(e) => setPaypalEmail(e.target.value)}
-                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-tiktok-pink focus:ring-2 focus:ring-tiktok-pink focus:outline-none placeholder-gray-500"
+                    className="bg-gray-800 text-white rounded-xl w-full p-3 border border-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-500"
                     required
                     placeholder="your-email@example.com"
                     disabled={processingCard}
@@ -2652,7 +2726,7 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
               <div className="mt-6">
                 <button
                   type="submit"
-                  className="bg-gradient-to-r from-blue-500 to-blue-700 text-white font-medium py-3 px-6 rounded-xl hover:opacity-90 transition-colors flex items-center justify-center w-full"
+                  className="bg-[#0079C1] text-white font-medium py-3 px-6 rounded-xl hover:bg-[#0069ad] transition-colors flex items-center justify-center w-full"
                   disabled={processingCard}
                 >
                   {processingCard ? (
@@ -2661,7 +2735,10 @@ const Account = ({ user, setUser, subscriptionUsage, loadingUsage, setSubscripti
                       Processing...
                     </>
                   ) : (
-                    'Connect PayPal Account'
+                    <>
+                      <FaPaypal className="mr-2" />
+                      Connect PayPal Account
+                    </>
                   )}
                 </button>
               </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { 
   CardElement, 
@@ -6,7 +6,7 @@ import {
   useElements, 
   PaymentRequestButtonElement 
 } from '@stripe/react-stripe-js';
-import { getPlans, createPaymentIntent, savePaymentMethod, getPaymentMethods, syncPaymentMethods } from '../../services/subscriptionService';
+import { getPlans, createPaymentIntent, savePaymentMethod, getPaymentMethods, syncPaymentMethods, setDefaultPaymentMethod } from '../../services/subscriptionService';
 import { getCurrentUser, logout } from '../../services/authService';
 import { FaPaypal, FaCreditCard, FaRegCreditCard, FaCcVisa, FaCcMastercard, FaCcAmex, FaCcDiscover } from 'react-icons/fa';
 
@@ -48,6 +48,12 @@ const PaymentForm = () => {
   const [loadingPaymentMethods, setLoadingPaymentMethods] = useState(false);
   const [upgradeDetails, setUpgradeDetails] = useState(null);
   const [calculatingProration, setCalculatingProration] = useState(false);
+  const [paymentIntent, setPaymentIntent] = useState(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null);
+  const [savePaymentInfo, setSavePaymentInfo] = useState(true);
+  
+  // Add a ref to track PayPal script loading status
+  const paypalScriptLoaded = useRef(false);
   
   // Check authentication 
   useEffect(() => {
@@ -77,16 +83,6 @@ const PaymentForm = () => {
       return;
     }
 
-    // Initialize local methods array
-    let localMethods = [];
-    
-    // First, get methods from local storage
-    if (currentUser.paymentMethods && Array.isArray(currentUser.paymentMethods) && currentUser.paymentMethods.length > 0) {
-      console.log('Found payment methods in user object:', currentUser.paymentMethods);
-      localMethods = currentUser.paymentMethods;
-    }
-
-    // Always try to fetch from API as well to ensure we have the latest data
     try {
       console.log('Fetching payment methods from API...');
       console.log('User token available:', !!currentUser.token);
@@ -98,27 +94,52 @@ const PaymentForm = () => {
         if (response.methods.length > 0) {
           console.log('Successfully fetched payment methods from API:', response.methods);
           
-          // Combine methods from API with local methods, removing duplicates
-          // API methods take precedence
-          const apiMethodIds = response.methods.map(m => m.id);
-          const uniqueLocalMethods = localMethods.filter(m => !apiMethodIds.includes(m.id));
-          const allMethods = [...response.methods, ...uniqueLocalMethods];
+          // Debug logging for isDefault property
+          response.methods.forEach((method, index) => {
+            console.log(`Payment method ${index + 1} (${method.id}) isDefault:`, method.isDefault);
+          });
           
-          // Update state with combined methods
-          setSavedPaymentMethods(allMethods);
+          // Update state with methods directly from API
+          setSavedPaymentMethods(response.methods);
           
           // Find a default method to select
           let methodToSelect = null;
           
-          // First check if user has a default payment method
-          if (currentUser.paymentMethod) {
-            console.log('Using default payment method from user object');
-            methodToSelect = currentUser.paymentMethod;
+          // Look for methods flagged as default from backend response
+          const defaultMethod = response.methods.find(m => m.isDefault);
+          if (defaultMethod) {
+            console.log('Using method flagged as default from backend');
+            methodToSelect = defaultMethod;
           } 
-          // Otherwise use the first method from the API
+          // Otherwise use the method matching the defaultPaymentMethodId
+          else if (response.defaultPaymentMethodId) {
+            const defaultById = response.methods.find(m => m.id === response.defaultPaymentMethodId);
+            if (defaultById) {
+              console.log('Using method identified by defaultPaymentMethodId');
+              methodToSelect = defaultById;
+            }
+          }
+          // Fall back to latest card if no default is specified
           else if (response.methods.length > 0) {
-            console.log('Using first payment method from API as default');
-            methodToSelect = response.methods[0];
+            // Find the latest card payment method (most recently added)
+            const cardMethods = response.methods.filter(m => m.type === 'card');
+            if (cardMethods.length > 0) {
+              methodToSelect = cardMethods[cardMethods.length - 1]; // Get the last card method
+              console.log('Using most recently added card payment method as default');
+              
+              // Set this as the default in the backend
+              try {
+                const result = await setDefaultPaymentMethod(methodToSelect.id, currentUser.token);
+                if (result.success) {
+                  console.log('Updated default payment method in backend');
+                }
+              } catch (error) {
+                console.error('Error setting default payment method:', error);
+              }
+            } else {
+              methodToSelect = response.methods[0];
+              console.log('No card methods found, using first available payment method as default');
+            }
           }
           
           if (methodToSelect) {
@@ -126,55 +147,28 @@ const PaymentForm = () => {
             setUseSavedMethod(true);
           }
           
-          // Update localStorage
-          try {
-            const updatedUser = { ...currentUser };
-            updatedUser.paymentMethods = allMethods;
-            
-            // Set default payment method if needed
-            if (!updatedUser.paymentMethod && allMethods.length > 0) {
-              updatedUser.paymentMethod = methodToSelect || allMethods[0];
-            }
-            
-            localStorage.setItem('user', JSON.stringify(updatedUser));
-            console.log('Updated user object in localStorage with payment methods');
-          } catch (storageError) {
-            console.error('Error updating localStorage:', storageError);
-          }
-          
           setLoadingPaymentMethods(false);
           return;
         } else {
           console.log('No payment methods returned from API');
+          setSavedPaymentMethods([]);
+          setSelectedSavedMethod(null);
+          setUseSavedMethod(false);
         }
       } else {
         console.log('API response unsuccessful or no methods returned');
+        setSavedPaymentMethods([]);
+        setSelectedSavedMethod(null);
+        setUseSavedMethod(false);
       }
     } catch (error) {
       console.error('Error fetching payment methods from API:', error);
-    }
-    
-    // If we reach here, we're using only local methods or API call failed
-    if (localMethods.length > 0) {
-      setSavedPaymentMethods(localMethods);
-      
-      // If user has a default payment method, pre-select it
-      if (currentUser.paymentMethod) {
-        setSelectedSavedMethod(currentUser.paymentMethod);
-        setUseSavedMethod(true);
-      } else {
-        // Otherwise select the first available method
-        setSelectedSavedMethod(localMethods[0]);
-        setUseSavedMethod(true);
-      }
-    } else {
-      // No methods available
       setSavedPaymentMethods([]);
       setSelectedSavedMethod(null);
       setUseSavedMethod(false);
+    } finally {
+      setLoadingPaymentMethods(false);
     }
-    
-    setLoadingPaymentMethods(false);
   };
   
   // Add this function after loadSavedPaymentMethods function
@@ -267,31 +261,51 @@ const PaymentForm = () => {
       setBillingCycle(cycle);
     }
     
-    // Load PayPal script
+    // Load PayPal script only once
     const loadPaypalScript = () => {
+      // If script already loaded and PayPal available, use it
+      if (window.paypal) {
+        console.log('PayPal already loaded, skipping script load');
+        setIsPaypalReady(true);
+        return;
+      }
+      
+      // If already in the process of loading
+      if (document.getElementById('paypal-sdk')) {
+        console.log('PayPal script loading in progress, waiting...');
+        return;
+      }
+      
       try {
-        // Check if script is already loaded
-        if (window.paypal) {
-          setIsPaypalReady(true);
+        const clientId = process.env.REACT_APP_PAYPAL_CLIENT_ID;
+        if (!clientId) {
+          console.error('PayPal client ID not found in environment');
+          setPaypalError('PayPal configuration error. Please contact support.');
           return;
         }
         
-        const clientId = process.env.REACT_APP_PAYPAL_CLIENT_ID || 'sb';
-        
+        // Create a minimal script
         const script = document.createElement('script');
-        script.src = `https://www.paypal.com/sdk/js?client-id=${clientId}&currency=USD&intent=subscription`;
+        script.id = 'paypal-sdk';
+        script.src = `https://www.paypal.com/sdk/js?client-id=${clientId}&currency=USD&intent=capture`;
         script.async = true;
+        
+        // Set up event handlers
         script.onload = () => {
+          console.log('PayPal SDK loaded successfully');
           setIsPaypalReady(true);
         };
+        
         script.onerror = (err) => {
-          console.error('PayPal script loading error:', err);
-          setPaypalError(`Failed to load PayPal: ${err.message || 'Unknown error'}`);
+          console.error('PayPal script failed to load:', err);
+          setPaypalError('Failed to load PayPal payment system');
         };
+        
+        // Add script to document
         document.body.appendChild(script);
       } catch (error) {
-        console.error('Error setting up PayPal script:', error);
-        setPaypalError(`PayPal setup error: ${error.message}`);
+        console.error('Error in PayPal script setup:', error);
+        setPaypalError('Error setting up PayPal: ' + error.message);
       }
     };
     
@@ -316,7 +330,7 @@ const PaymentForm = () => {
             console.log(`Selected plan details: ${planResult.plan.name}, ID: ${planResult.plan._id}, Method: ${planResult.method}`);
             
             setPlan(planResult.plan);
-            } else {
+          } else {
             console.log('No plan ID provided, defaulting to first plan:', result.plans[0].name);
             setPlan(result.plans[0]);
           }
@@ -332,6 +346,11 @@ const PaymentForm = () => {
     };
     
     fetchPlans();
+    
+    // Cleanup function
+    return () => {
+      // Do nothing for cleanup
+    };
   }, [location, authError]);
   
   // Add this useEffect to log whenever the plan changes
@@ -359,14 +378,17 @@ const PaymentForm = () => {
   
   // Setup PayPal when it's selected and ready
   useEffect(() => {
+    // Only run this effect when all conditions are met to avoid infinite loops
     if (paymentMethod === 'paypal' && isPaypalReady && plan && window.paypal) {
       try {
+        console.log('PayPal selected and ready, rendering basic buttons');
+        
         // Use pro-rated price for upgrades, otherwise use the regular plan price
         const price = upgradeDetails 
           ? parseFloat(upgradeDetails.proratedUpgradeCost)
           : billingCycle === 'monthly' 
-          ? plan.monthlyPrice
-          : plan.yearlyPrice;
+            ? plan.monthlyPrice
+            : plan.yearlyPrice;
         
         const paypalContainer = document.getElementById('paypal-button-container');
         if (!paypalContainer) {
@@ -374,58 +396,109 @@ const PaymentForm = () => {
           return;
         }
         
+        // Check if buttons already rendered to avoid duplicate renders
+        if (paypalContainer.querySelector('.paypal-button')) {
+          console.log('PayPal buttons already rendered, skipping');
+          return;
+        }
+        
         // Clear the container first
         paypalContainer.innerHTML = '';
         
-        window.paypal.Buttons({
+        // Create minimal button configuration
+        const buttonConfig = {
           style: {
             layout: 'vertical',
-            color: 'black',
+            color: 'gold',
             shape: 'rect',
-            label: 'pay'
+            label: 'paypal'
           },
-          createOrder: async (data, actions) => {
+          createOrder: (data, actions) => {
+            console.log('Creating PayPal order for plan:', plan.name, 'Price:', price);
+            
             return actions.order.create({
               purchase_units: [{
+                description: `${plan.name} Plan (${billingCycle})`,
                 amount: {
                   value: price.toFixed(2),
                   currency_code: 'USD'
-                },
-                description: upgradeDetails 
-                  ? `Upgrade to ${plan.name} Plan (${billingCycle})`
-                  : `${plan.name} Plan (${billingCycle})`
-              }]
+                }
+              }],
+              application_context: {
+                shipping_preference: 'NO_SHIPPING',
+                user_action: 'PAY_NOW'
+              }
             });
           },
           onApprove: async (data, actions) => {
             setProcessing(true);
+            console.log('PayPal order approved:', data);
             
             try {
-              // Mock saving the payment method info
-              await savePaymentMethod({
-                type: 'paypal',
-                email: getCurrentUser().email,
-                brand: 'paypal',
-                last4: 'PayPal'
+              // Capture the order
+              const details = await actions.order.capture();
+              console.log('Order captured:', details);
+              
+              // Extract PayPal email if available
+              const paypalEmail = details.payer?.email_address || getCurrentUser().email;
+              
+              // Call backend to record the payment
+              const response = await fetch('/api/subscriptions/paypal/record', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${getCurrentUser().token}`
+                },
+                body: JSON.stringify({
+                  subscriptionId: data.orderID,
+                  planId: plan._id,
+                  billingCycle: billingCycle,
+                  planName: plan.name,
+                  price: price,
+                  vaultInfo: {
+                    payerID: details.payer?.payer_id,
+                    email: paypalEmail
+                  }
+                })
               });
               
-              navigate('/payment-success');
+              const result = await response.json();
+              
+              if (!result.success) {
+                console.warn('Warning: Backend failed to record payment:', result.error);
+                setError('Payment processed but failed to update account. Please contact support.');
+              } else {
+                console.log('Payment recorded in backend:', result);
+                
+                // PayPal info will be available from the backend response, no need to save as payment method
+                
+                // Redirect to success page
+                navigate('/payment-success');
+              }
             } catch (error) {
-              console.error('PayPal payment error:', error);
-              setError('Something went wrong processing your PayPal payment.');
+              console.error('Error capturing order:', error);
+              setError('Failed to process payment: ' + error.message);
             } finally {
               setProcessing(false);
             }
           },
+          onCancel: () => {
+            console.log('Payment canceled by user');
+          },
           onError: (err) => {
             console.error('PayPal error:', err);
-            setError('PayPal encountered an error. Please try a different payment method.');
+            setError('PayPal encountered an error: ' + (err.message || 'Unknown error'));
           }
-        }).render('#paypal-button-container').catch(err => {
+        };
+        
+        // Simple render approach
+        window.paypal.Buttons(buttonConfig).render('#paypal-button-container').catch(err => {
           console.error('PayPal render error:', err);
+          setPaypalError('Failed to render PayPal buttons: ' + (err.message || 'Unknown error'));
         });
       } catch (error) {
         console.error('Error setting up PayPal:', error);
+        setPaypalError('Error setting up PayPal: ' + error.message);
       }
     }
   }, [paymentMethod, isPaypalReady, plan, billingCycle, navigate, upgradeDetails]);
@@ -587,7 +660,8 @@ const PaymentForm = () => {
       brand: '',
       last4: '****',
       expMonth: null,
-      expYear: null
+      expYear: null,
+      isDefault: method.isDefault || false // Preserve isDefault flag
     };
     
     // Handle nested card object
@@ -611,21 +685,23 @@ const PaymentForm = () => {
   
   const handleSubmit = async (ev) => {
     ev.preventDefault();
-    setProcessing(true);
+    
+    if (!stripe || !elements) {
+      setError("Stripe has not loaded yet. Please try again in a moment.");
+      return;
+    }
+    
+    if (processing) {
+      return;
+    }
+    
+    if (paymentMethod === 'paypal') {
+      setError('Please use the PayPal button to complete your payment.');
+      return;
+    }
+    
     setError('');
-    
-    // Check authentication before processing payment
-    const user = getCurrentUser();
-    if (!user || !user.token) {
-      setError('Authentication error: You need to be logged in to make a payment.');
-      setProcessing(false);
-      return;
-    }
-    
-    if (!stripe || !elements || !plan) {
-      setProcessing(false);
-      return;
-    }
+    setProcessing(true);
     
     try {
       let paymentMethodId;
@@ -635,8 +711,8 @@ const PaymentForm = () => {
         console.log('Using saved payment method:', selectedSavedMethod);
         paymentMethodId = selectedSavedMethod.id;
         
-        // Verify that the payment method ID is valid (begins with pm_)
-        if (!paymentMethodId || !paymentMethodId.startsWith('pm_')) {
+        // For PayPal payment methods, we don't need to validate the ID format
+        if (selectedSavedMethod.type !== 'paypal' && (!paymentMethodId || !paymentMethodId.startsWith('pm_'))) {
           console.error('Invalid payment method ID format:', paymentMethodId);
           setError('The saved payment method appears to be invalid. Please try using a new card instead.');
           setUseSavedMethod(false);
@@ -662,15 +738,36 @@ const PaymentForm = () => {
         // Automatically save this new payment method for future use
         if (paymentMethod && paymentMethod.id && paymentMethod.card) {
           try {
-            await savePaymentMethod({
-              id: paymentMethod.id,
-              type: 'card',
-              brand: paymentMethod.card.brand,
-              last4: paymentMethod.card.last4,
-              expMonth: paymentMethod.card.exp_month,
-              expYear: paymentMethod.card.exp_year
-            });
-            console.log('New payment method saved for future use');
+            // Check if a card with same brand and last4 already exists
+            const isDuplicate = savedPaymentMethods.some(method => 
+              method.type === 'card' && 
+              method.brand === paymentMethod.card.brand && 
+              method.last4 === paymentMethod.card.last4
+            );
+            
+            // Only save if not a duplicate
+            if (!isDuplicate) {
+              const newPaymentMethod = {
+                id: paymentMethod.id,
+                type: 'card',
+                brand: paymentMethod.card.brand,
+                last4: paymentMethod.card.last4,
+                expMonth: paymentMethod.card.exp_month,
+                expYear: paymentMethod.card.exp_year,
+                isDefault: true // Explicitly mark as default when saving
+              };
+              
+              const response = await savePaymentMethod(newPaymentMethod);
+              
+              if (response.success) {
+                console.log('New payment method saved for future use and set as default');
+                
+                // No need for a separate setDefaultPaymentMethod call since we marked it as default
+                // in the savePaymentMethod call above
+              }
+            } else {
+              console.log('Card already exists in saved payment methods, not saving duplicate');
+            }
           } catch (saveError) {
             console.error('Error saving payment method:', saveError);
             // Continue with payment even if saving failed
@@ -701,6 +798,15 @@ const PaymentForm = () => {
       // Handle subscription status
       if (result.success) {
         console.log('Payment successful:', result);
+        
+        // Refresh payment methods from backend to get the latest default
+        try {
+          await loadSavedPaymentMethods();
+        } catch (refreshError) {
+          console.error('Error refreshing payment methods:', refreshError);
+          // Continue with payment flow even if refresh fails
+        }
+        
         if (result.subscription.status === 'active') {
           navigate('/payment-success');
         } 
@@ -946,6 +1052,46 @@ const PaymentForm = () => {
       default:
         return "";
     }
+  };
+  
+  const renderFallbackButtons = () => {
+    // Determine if we have saved PayPal information
+    const paypalMethod = savedPaymentMethods.find(method => method.type === 'paypal' && method.paypalPayerID);
+    
+    if (paypalMethod) {
+      return (
+        <div className="mb-4">
+          <div className="bg-blue-900/20 border border-blue-500 rounded-md p-4 mb-4">
+            <div className="flex items-start">
+              <div className="text-blue-400 mr-3 mt-1">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2h-1V9a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-white text-sm font-medium">You'll need to authorize with PayPal again</p>
+                <p className="text-gray-400 text-xs mt-1">
+                  For security reasons, PayPal requires you to log in each time, but we'll use your saved payment information.
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex items-center mt-4 p-3 bg-gray-900 rounded-md">
+              <FaPaypal className="text-[#0079C1] text-2xl mr-3" />
+              <div>
+                <p className="text-white text-sm font-medium">PayPal Account</p>
+                <p className="text-gray-400 text-xs">{paypalMethod.email || 'PayPal account'}</p>
+              </div>
+              <div className="ml-auto bg-blue-600 text-white text-xs px-2 py-1 rounded">
+                Saved
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    return null;
   };
   
   if (loading || !plan) {
@@ -1339,13 +1485,22 @@ const PaymentForm = () => {
                               
                               {/* Card details */}
                               <div>
-                                <div className="text-white font-medium">
-                                  {method.type === 'card' ? (
-                                    <>•••• {method.last4}</>
-                                  ) : method.type === 'paypal' ? (
-                                    'PayPal Account'
-                                  ) : (
-                                    'Payment Method'
+                                <div className="flex items-center">
+                                  <span className="text-white font-medium">
+                                    {method.type === 'card' ? (
+                                      <>•••• {method.last4}</>
+                                    ) : method.type === 'paypal' ? (
+                                      'PayPal Account'
+                                    ) : (
+                                      'Payment Method'
+                                    )}
+                                  </span>
+                                  
+                                  {/* Default label */}
+                                  {method.isDefault && (
+                                    <span className="ml-2 px-2 py-0.5 bg-blue-600 text-xs rounded-full text-white">
+                                      Default
+                                    </span>
                                   )}
                                 </div>
                                 
@@ -1489,13 +1644,34 @@ const PaymentForm = () => {
               {/* PayPal Component */}
               {paymentMethod === 'paypal' && (
                 <div className="mb-6">
-                  <div id="paypal-button-container" className="min-h-[44px] bg-gray-800 rounded-md flex items-center justify-center">
+                  {renderFallbackButtons()}
+                  <div id="paypal-button-container" className="min-h-[200px] rounded-md flex items-center justify-center mb-4 p-2 bg-gray-900 border border-gray-700">
                     {!isPaypalReady && (
-                      <p className="text-gray-400 text-sm">Loading PayPal...</p>
+                      <div className="flex flex-col items-center justify-center">
+                        <div className="animate-spin h-10 w-10 border-t-2 border-b-2 border-blue-500 rounded-full mb-4"></div>
+                        <p className="text-gray-300 font-medium">Loading PayPal...</p>
+                        <p className="text-xs text-gray-500 mt-1">This may take a few seconds</p>
+                      </div>
                     )}
                   </div>
                   {paypalError && (
-                    <p className="text-red-500 text-sm mt-2">{paypalError}</p>
+                    <div className="bg-red-900/20 border border-red-500 rounded-md p-4 mt-2">
+                      <p className="text-red-400 text-sm flex items-center font-medium">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        {paypalError}
+                      </p>
+                      <div className="bg-gray-800 rounded p-3 mt-3 text-gray-400 text-sm">
+                        <p className="mb-2">Troubleshooting:</p>
+                        <ul className="list-disc pl-5 space-y-1 text-xs">
+                          <li>Try refreshing the page</li>
+                          <li>Disable ad blockers or browser extensions</li>
+                          <li>Try a different browser</li>
+                          <li>Use a credit card payment instead</li>
+                        </ul>
+                      </div>
+                    </div>
                   )}
                 </div>
               )}

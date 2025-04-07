@@ -327,8 +327,10 @@ const savePaymentMethod = async (paymentMethodData) => {
       };
     }
     
-    // Validate - this must be a Stripe payment method
-    if (!paymentMethodData.id || !paymentMethodData.id.startsWith('pm_')) {
+    // Validate - for cards this must be a Stripe payment method
+    // For PayPal we don't need to validate the ID format
+    if (paymentMethodData.type !== 'paypal' && 
+        (!paymentMethodData.id || !paymentMethodData.id.startsWith('pm_'))) {
       console.error('savePaymentMethod: Invalid payment method ID format', paymentMethodData.id);
       return {
         success: false,
@@ -348,48 +350,18 @@ const savePaymentMethod = async (paymentMethodData) => {
       id: paymentMethodData.id,
       type: paymentMethodData.type,
       brand: paymentMethodData.brand,
-      last4: paymentMethodData.last4
+      last4: paymentMethodData.last4,
+      email: paymentMethodData.type === 'paypal' ? paymentMethodData.email : undefined
     });
     
     // Make API request to save payment method - fix API URL prefix
     const baseApiUrl = API_URL.replace('/api/subscriptions', '');
     
     const response = await axios.post(
-      `${baseApiUrl}/api/payments/methods`, 
+      `${baseApiUrl}/api/payments/methods`,
       paymentMethodData,
       authHeader
     );
-    
-    // If successful, update local user data
-    if (response.data.success && response.data.paymentMethod) {
-      try {
-        const currentUser = JSON.parse(localStorage.getItem('user'));
-        if (currentUser) {
-          currentUser.paymentMethod = response.data.paymentMethod;
-          
-          // Initialize paymentMethods array if it doesn't exist
-          if (!currentUser.paymentMethods) {
-            currentUser.paymentMethods = [];
-          }
-          
-          // Check if payment method already exists by ID
-          const methodExists = currentUser.paymentMethods.some(
-            pm => pm.id === response.data.paymentMethod.id
-          );
-          
-          // Add to array if it doesn't exist
-          if (!methodExists) {
-            currentUser.paymentMethods.push(response.data.paymentMethod);
-          }
-          
-          localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Payment method saved to local user data');
-        }
-      } catch (localStorageError) {
-        console.error('Error updating local storage:', localStorageError);
-        // Continue since the server save was successful
-      }
-    }
     
     return response.data;
   } catch (error) {
@@ -424,9 +396,6 @@ const getPaymentMethods = async () => {
     console.log('Fetching payment methods from server');
     
     // Make API request to get payment methods - fix API URL prefix
-    // The API_URL is defined at the top of the file as process.env.REACT_APP_API_URL || 'http://localhost:5000/api/subscriptions'
-    // But we need the payments endpoint, not subscriptions endpoint
-    // Extract the base URL from API_URL by removing the 'subscriptions' part
     const baseApiUrl = API_URL.replace('/api/subscriptions', '');
     
     const response = await axios.get(
@@ -435,28 +404,6 @@ const getPaymentMethods = async () => {
     );
     
     console.log('Payment methods API response:', response.data);
-    
-    // If successful, update local user data
-    if (response.data.success && response.data.methods) {
-      try {
-        const currentUser = JSON.parse(localStorage.getItem('user'));
-        if (currentUser) {
-          // Update payment methods in user object
-          currentUser.paymentMethods = response.data.methods;
-          
-          // If there's at least one payment method and no default, set the first one as default
-          if (response.data.methods.length > 0 && !currentUser.paymentMethod) {
-            currentUser.paymentMethod = response.data.methods[0];
-          }
-          
-          localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Payment methods saved to local user data');
-        }
-      } catch (localStorageError) {
-        console.error('Error updating local storage:', localStorageError);
-        // Continue since we can return the fetched methods
-      }
-    }
     
     return response.data;
   } catch (error) {
@@ -469,7 +416,7 @@ const getPaymentMethods = async () => {
     
     return {
       success: false,
-      error: error.response?.data?.error || error.message || 'Failed to fetch payment methods'
+      error: error.response?.data?.error || 'Failed to fetch payment methods'
     };
   }
 };
@@ -504,31 +451,7 @@ const syncPaymentMethods = async () => {
       authHeader
     );
     
-    // If successful, update local user data
-    if (response.data.success && response.data.methods) {
-      try {
-        const currentUser = JSON.parse(localStorage.getItem('user'));
-        if (currentUser) {
-          // Update payment methods in user object
-          currentUser.paymentMethods = response.data.methods;
-          
-          // If there are payment methods but no default set, use the first one
-          if (response.data.methods.length > 0 && !currentUser.paymentMethod) {
-            currentUser.paymentMethod = response.data.methods[0];
-          } 
-          // If no payment methods, clear the default
-          else if (response.data.methods.length === 0) {
-            currentUser.paymentMethod = null;
-          }
-          
-          localStorage.setItem('user', JSON.stringify(currentUser));
-          console.log('Payment methods updated in local user data');
-        }
-      } catch (localStorageError) {
-        console.error('Error updating local storage:', localStorageError);
-      }
-    }
-    
+    // Return the backend response directly
     return response.data;
   } catch (error) {
     console.error('Error syncing payment methods:', error);
@@ -544,6 +467,47 @@ const refreshSubscriptionData = async () => {
   return await getSubscriptionStatus();
 };
 
+// Set default payment method
+const setDefaultPaymentMethod = async (methodId, token) => {
+  try {
+    const user = getCurrentUser();
+    
+    if (!user || !user.token) {
+      console.error('setDefaultPaymentMethod: No valid user token found');
+      return {
+        success: false,
+        error: 'Authentication required. Please log in again.'
+      };
+    }
+    
+    // Get auth header after confirming user exists
+    const authHeader = {
+      headers: {
+        Authorization: `Bearer ${user.token || token}`,
+      },
+    };
+    
+    // Make API request to set default payment method
+    const baseApiUrl = API_URL.replace('/api/subscriptions', '');
+    
+    const response = await axios.put(
+      `${baseApiUrl}/api/payments/methods/default`,
+      { methodId },
+      authHeader
+    );
+    
+    console.log('Set default payment method response:', response.data);
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error setting default payment method:', error);
+    return {
+      success: false,
+      error: error.response?.data?.error || 'Failed to set default payment method'
+    };
+  }
+};
+
 export {
   getPlans,
   getSubscriptionStatus,
@@ -556,5 +520,6 @@ export {
   refreshSubscriptionData,
   savePaymentMethod,
   getPaymentMethods,
-  syncPaymentMethods
+  syncPaymentMethods,
+  setDefaultPaymentMethod
 }; 
