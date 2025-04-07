@@ -4,6 +4,390 @@ import config from '../../services/config';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
+// Text Editor Modal Component
+const TextEditorModal = ({ isOpen, onClose, text, onSave, title, scene, index }) => {
+  const [editedText, setEditedText] = useState(text);
+  const [textPosition, setTextPosition] = useState({ x: 50, y: 60 }); // Default position (percentage)
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [textStyle, setTextStyle] = useState({
+    color: "#FFFFFF", // Default white
+    fontFamily: "Arial",
+    isBold: true,
+    fontSize: 16
+  });
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const modalRef = useRef(null);
+  const imageContainerRef = useRef(null);
+  const textOverlayRef = useRef(null);
+  const emojiPickerRef = useRef(null);
+  
+  // Reset edited text and position when modal is opened with new text
+  useEffect(() => {
+    setEditedText(text);
+    // If we have saved position data, use it, otherwise default
+    if (scene && scene.textPosition) {
+      setTextPosition(scene.textPosition);
+    } else {
+      setTextPosition({ x: 50, y: 60 }); // Default position (center, 60% down)
+    }
+    
+    // Initialize text styling from saved data or defaults
+    if (scene && scene.textStyle) {
+      setTextStyle(scene.textStyle);
+    } else {
+      setTextStyle({
+        color: "#FFFFFF", // Default white
+        fontFamily: "Arial",
+        isBold: true,
+        fontSize: 16
+      });
+    }
+  }, [text, isOpen, scene]);
+  
+  // Handle drag start
+  const handleMouseDown = (e) => {
+    if (!textOverlayRef.current || !imageContainerRef.current) return;
+    
+    // Prevent default behavior and text selection during drag
+    e.preventDefault();
+    
+    const textRect = textOverlayRef.current.getBoundingClientRect();
+    const containerRect = imageContainerRef.current.getBoundingClientRect();
+    
+    // Calculate click offset from the top-left of the text element
+    const offsetX = e.clientX - textRect.left;
+    const offsetY = e.clientY - textRect.top;
+    
+    setDragOffset({ x: offsetX, y: offsetY });
+    setIsDragging(true);
+  };
+  
+  // Handle drag move
+  const handleMouseMove = (e) => {
+    if (!isDragging || !imageContainerRef.current) return;
+    
+    const containerRect = imageContainerRef.current.getBoundingClientRect();
+    
+    // Calculate new position in pixels relative to container
+    const newX = e.clientX - containerRect.left - dragOffset.x;
+    const newY = e.clientY - containerRect.top - dragOffset.y;
+    
+    // Convert to percentage for responsive positioning
+    const percentX = (newX / containerRect.width) * 100;
+    const percentY = (newY / containerRect.height) * 100;
+    
+    // Clamp values to keep text within bounds
+    const clampedX = Math.max(5, Math.min(95, percentX));
+    const clampedY = Math.max(5, Math.min(95, percentY));
+    
+    setTextPosition({ x: clampedX, y: clampedY });
+  };
+  
+  // Handle drag end
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+  
+  // Add and remove event listeners for dragging
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    } else {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    }
+    
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
+  
+  // Handle click outside to close
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (modalRef.current && !modalRef.current.contains(event.target)) {
+        onClose();
+      }
+    };
+    
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isOpen, onClose]);
+  
+  // Add emoji to text
+  const addEmoji = (emoji) => {
+    setEditedText(prev => prev + emoji);
+    setShowEmojiPicker(false);
+  };
+  
+  // Update a specific style property
+  const updateTextStyle = (property, value) => {
+    setTextStyle(prev => ({
+      ...prev,
+      [property]: value
+    }));
+  };
+  
+  // Handle click outside for emoji picker
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target)) {
+        setShowEmojiPicker(false);
+      }
+    };
+    
+    if (showEmojiPicker) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showEmojiPicker]);
+  
+  // Define available font families
+  const fontFamilies = [
+    "Arial",
+    "Verdana",
+    "Georgia",
+    "Times New Roman",
+    "Courier New",
+    "Impact",
+    "Comic Sans MS"
+  ];
+  
+  // Define color options
+  const colorOptions = [
+    "#FFFFFF", // White
+    "#FFEB3B", // Yellow
+    "#FF5722", // Orange
+    "#E91E63", // Pink
+    "#03A9F4", // Light Blue
+    "#4CAF50", // Green
+    "#9C27B0"  // Purple
+  ];
+  
+  // Define text size options
+  const fontSizeOptions = [
+    { label: "Small", value: 14 },
+    { label: "Medium", value: 16 },
+    { label: "Large", value: 20 },
+    { label: "X-Large", value: 24 }
+  ];
+  
+  if (!isOpen || !scene) return null;
+  
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center z-50 p-4">
+      <div 
+        ref={modalRef}
+        className="bg-tiktok-dark border border-gray-700 rounded-lg w-full max-w-4xl shadow-xl flex flex-col max-h-[90vh]"
+      >
+        <div className="p-4 border-b border-gray-700 flex justify-between items-center">
+          <h3 className="text-lg font-medium text-white">{title || 'Edit Text Overlay'}</h3>
+          <button 
+            onClick={onClose}
+            className="text-gray-400 hover:text-white"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+          </button>
+        </div>
+        
+        <div className="flex flex-col md:flex-row flex-grow overflow-hidden">
+          {/* Image preview with draggable text */}
+          <div className="flex-1 p-4 overflow-hidden flex flex-col">
+            <div className="text-sm text-gray-400 mb-2">
+              Position the text by dragging it. Click and drag to place it where you want.
+            </div>
+            
+            <div 
+              ref={imageContainerRef}
+              className="relative flex-1 overflow-hidden bg-black rounded-lg flex items-center justify-center"
+            >
+              <img 
+                src={scene.imageUrl} 
+                alt={`Scene ${index + 1}`} 
+                className="max-w-full max-h-full object-contain"
+              />
+              
+              {/* Draggable text overlay */}
+              <div 
+                ref={textOverlayRef}
+                className="absolute p-4 cursor-move select-none"
+                style={{ 
+                  left: `${textPosition.x}%`, 
+                  top: `${textPosition.y}%`, 
+                  transform: 'translate(-50%, -50%)',
+                  maxWidth: '80%',
+                  pointerEvents: isDragging ? 'none' : 'auto', // Prevent text from capturing events during drag
+                  color: textStyle.color,
+                  fontFamily: textStyle.fontFamily,
+                  fontWeight: textStyle.isBold ? 'bold' : 'normal',
+                  fontSize: `${textStyle.fontSize}px`
+                }}
+                onMouseDown={handleMouseDown}
+              >
+                <p className="text-center leading-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">
+                  {editedText}
+                </p>
+              </div>
+            </div>
+          </div>
+          
+          {/* Text edit panel */}
+          <div className="w-full md:w-96 p-4 border-t md:border-t-0 md:border-l border-gray-700 flex flex-col">
+            <label className="block text-gray-300 mb-2 text-sm">
+              Edit Text Overlay
+            </label>
+            <div className="relative">
+              <textarea
+                value={editedText}
+                onChange={(e) => setEditedText(e.target.value)}
+                className="w-full bg-black border border-gray-700 rounded-lg px-4 py-3 text-white 
+                        placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-tiktok-pink flex-1 min-h-[100px]"
+                placeholder="Enter text for the overlay..."
+                autoFocus
+              />
+              
+              <button
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                className="absolute bottom-3 right-3 text-gray-400 hover:text-white"
+                title="Add emoji"
+              >
+                <span className="text-xl">😊</span>
+              </button>
+              
+              {showEmojiPicker && (
+                <div 
+                  ref={emojiPickerRef}
+                  className="absolute right-0 bottom-12 bg-gray-900 border border-gray-700 p-2 rounded-lg shadow-xl z-10"
+                >
+                  <div className="grid grid-cols-7 gap-1">
+                    {["😀", "😂", "😍", "🔥", "👍", "🎉", "💯", 
+                      "❤️", "👏", "🙌", "✨", "💪", "🤔", "😎",
+                      "🚀", "💡", "⭐", "🌈", "🎯", "🏆", "💰"].map(emoji => (
+                      <button
+                        key={emoji}
+                        onClick={() => addEmoji(emoji)}
+                        className="w-8 h-8 flex items-center justify-center hover:bg-gray-800 rounded text-lg"
+                      >
+                        {emoji}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            {/* Text Styling Controls */}
+            <div className="mt-4 border-t border-gray-700 pt-4">
+              <h3 className="text-sm font-medium text-gray-300 mb-3">Text Styling</h3>
+              
+              {/* Text Color */}
+              <div className="mb-3">
+                <label className="block text-xs text-gray-400 mb-2">Text Color</label>
+                <div className="flex flex-wrap gap-2">
+                  {colorOptions.map(color => (
+                    <button
+                      key={color}
+                      onClick={() => updateTextStyle('color', color)}
+                      className={`w-6 h-6 rounded-full ${textStyle.color === color ? 'ring-2 ring-tiktok-pink ring-offset-1 ring-offset-gray-900' : ''}`}
+                      style={{ backgroundColor: color }}
+                      title={color}
+                    />
+                  ))}
+                </div>
+              </div>
+              
+              {/* Font Family */}
+              <div className="mb-3">
+                <label className="block text-xs text-gray-400 mb-2">Font</label>
+                <select
+                  value={textStyle.fontFamily}
+                  onChange={(e) => updateTextStyle('fontFamily', e.target.value)}
+                  className="w-full bg-black border border-gray-700 rounded px-3 py-2 text-white text-sm"
+                >
+                  {fontFamilies.map(font => (
+                    <option key={font} value={font} style={{ fontFamily: font }}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              {/* Font Size */}
+              <div className="mb-3">
+                <label className="block text-xs text-gray-400 mb-2">Text Size</label>
+                <div className="flex gap-2">
+                  {fontSizeOptions.map(option => (
+                    <button
+                      key={option.value}
+                      onClick={() => updateTextStyle('fontSize', option.value)}
+                      className={`px-3 py-1 border rounded text-xs ${
+                        textStyle.fontSize === option.value
+                          ? 'border-tiktok-pink text-tiktok-pink bg-tiktok-pink/10'
+                          : 'border-gray-700 text-gray-300 hover:border-gray-500'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Bold Toggle */}
+              <div className="mb-3">
+                <button
+                  onClick={() => updateTextStyle('isBold', !textStyle.isBold)}
+                  className={`px-3 py-1 border rounded text-xs ${
+                    textStyle.isBold
+                      ? 'border-tiktok-pink text-tiktok-pink bg-tiktok-pink/10'
+                      : 'border-gray-700 text-gray-300 hover:border-gray-500'
+                  }`}
+                >
+                  <span className="font-bold">B</span> Bold
+                </button>
+              </div>
+            </div>
+            
+            <div className="mt-2 text-xs text-gray-400">
+              <p>This text will be displayed as overlay on the image when downloading or creating video.</p>
+            </div>
+          </div>
+        </div>
+        
+        <div className="p-4 border-t border-gray-700 flex justify-end space-x-3">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-800 text-white rounded-md hover:bg-gray-700 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              onSave(editedText, textPosition, textStyle); // Pass text, position and style data
+              onClose();
+            }}
+            className="px-4 py-2 bg-gradient-to-r from-tiktok-blue to-tiktok-pink text-white rounded-md hover:opacity-90 transition-colors"
+          >
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Helper function to get auth header
 const authHeader = () => {
   const user = JSON.parse(localStorage.getItem('user'));
@@ -33,6 +417,11 @@ const ScriptToScenes = () => {
   const [sceneCount, setSceneCount] = useState(5);
   const [showOverlays, setShowOverlays] = useState({});
   const [globalOverlay, setGlobalOverlay] = useState(true);
+  const [editedDescriptions, setEditedDescriptions] = useState({});
+  const [textPositions, setTextPositions] = useState({}); // Store text positions for each scene
+  const [textStyles, setTextStyles] = useState({}); // Store text styles for each scene
+  const [currentEditingIndex, setCurrentEditingIndex] = useState(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const textareaRef = useRef(null);
   const [isCreatingVideo, setIsCreatingVideo] = useState(false);
   const [videoUrl, setVideoUrl] = useState('');
@@ -82,6 +471,24 @@ const ScriptToScenes = () => {
         initialOverlays[index] = globalOverlay;
       });
       setShowOverlays(initialOverlays);
+      
+      // Initialize edited descriptions with original descriptions
+      const initialDescriptions = {};
+      const initialPositions = {};
+      const initialStyles = {};
+      sceneImages.forEach((scene, index) => {
+        initialDescriptions[index] = scene.description;
+        initialPositions[index] = { x: 50, y: 60 }; // Default position (center, 60% down)
+        initialStyles[index] = {
+          color: "#FFFFFF", // Default white
+          fontFamily: "Arial",
+          isBold: true,
+          fontSize: 16
+        };
+      });
+      setEditedDescriptions(initialDescriptions);
+      setTextPositions(initialPositions);
+      setTextStyles(initialStyles);
     }
   }, [sceneImages, globalOverlay]);
 
@@ -103,6 +510,71 @@ const ScriptToScenes = () => {
       updatedOverlays[key] = newGlobalState;
     });
     setShowOverlays(updatedOverlays);
+  };
+
+  // Open edit modal for a specific scene
+  const openEditModal = (index) => {
+    setCurrentEditingIndex(index);
+    setIsEditModalOpen(true);
+  };
+
+  // Close edit modal
+  const closeEditModal = () => {
+    setCurrentEditingIndex(null);
+    setIsEditModalOpen(false);
+  };
+
+  // Save edited text
+  const saveEditedText = (text, position, style) => {
+    if (currentEditingIndex !== null) {
+      setEditedDescriptions(prev => ({
+        ...prev,
+        [currentEditingIndex]: text
+      }));
+      
+      // Save the text position
+      if (position) {
+        setTextPositions(prev => ({
+          ...prev,
+          [currentEditingIndex]: position
+        }));
+      }
+      
+      // Save the text style
+      if (style) {
+        setTextStyles(prev => ({
+          ...prev,
+          [currentEditingIndex]: style
+        }));
+      }
+    }
+  };
+
+  // Reset edited text to original
+  const resetEditedText = (index) => {
+    if (sceneImages[index]) {
+      setEditedDescriptions(prev => ({
+        ...prev,
+        [index]: sceneImages[index].description
+      }));
+      
+      // Also reset the position to default
+      setTextPositions(prev => ({
+        ...prev,
+        [index]: { x: 50, y: 60 }
+      }));
+      
+      // Reset text style to default
+      setTextStyles(prev => ({
+        ...prev,
+        [index]: {
+          color: "#FFFFFF", // Default white
+          fontFamily: "Arial",
+          isBold: true,
+          fontSize: 16
+        }
+      }));
+    }
   };
 
   // Generate expanded script with Gemini
@@ -174,7 +646,9 @@ const ScriptToScenes = () => {
           
           // Apply text overlay if needed for this specific scene
           if (shouldAddOverlay) {
-            imageData = await renderTextOverlay(imageData, scene.description, index);
+            // Use edited text if available
+            const textToUse = editedDescriptions[index] || scene.description;
+            imageData = await renderTextOverlay(imageData, textToUse, index);
           }
           
           // Extract the base64 data correctly based on the image format
@@ -188,7 +662,7 @@ const ScriptToScenes = () => {
           }
           
           // Add to zip with a more user-friendly name based on first few words of description
-          const descWords = scene.description.split(' ').slice(0, 4).join('_');
+          const descWords = (editedDescriptions[index] || scene.description).split(' ').slice(0, 4).join('_');
           const fileName = `scene_${index + 1}_${descWords.replace(/[^\w]/g, '')}_${shouldAddOverlay ? 'with_text' : 'no_text'}.png`;
           folder.file(fileName, base64Data, { base64: true });
           
@@ -396,20 +870,37 @@ const ScriptToScenes = () => {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
         
+        // Get position from stored positions or default
+        const position = textPositions[index] || { x: 50, y: 60 };
+        
+        // Get styles from stored styles or default
+        const style = textStyles[index] || {
+          color: "#FFFFFF",
+          fontFamily: "Arial",
+          isBold: true,
+          fontSize: 16
+        };
+        
         // Add text with better sizing proportional to image
-        const fontSize = Math.max(16, Math.floor(width / 28));
+        const fontSize = Math.max(style.fontSize, Math.floor(width / 30));
         
         // Create semi-transparent text with subtle shadow for readability
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-        ctx.font = `${fontSize}px Arial`;
+        ctx.fillStyle = style.color;
+        ctx.font = `${style.isBold ? 'bold' : 'normal'} ${fontSize}px ${style.fontFamily}`;
         ctx.shadowColor = 'rgba(0, 0, 0, 0.7)';
         ctx.shadowBlur = 7;
         ctx.shadowOffsetX = 1;
         ctx.shadowOffsetY = 1;
         
-        // Center text horizontally and position toward middle-lower part of image
+        // Calculate text position in pixels
+        const xPos = (position.x / 100) * width;
+        const yPos = (position.y / 100) * height;
+        
+        // Center text horizontally
+        ctx.textAlign = "center";
+        
+        // Calculate text lines
         const maxWidth = width * 0.8; // 80% of image width
-        const leftPadding = width * 0.1; // 10% padding on each side
         const words = description.split(' ');
         let line = '';
         
@@ -436,17 +927,16 @@ const ScriptToScenes = () => {
           displayedLines[displayedLines.length - 1] += '...';
         }
         
-        // Position text in center-bottom area (60% down the image)
+        // Calculate total text height and draw each line centered at the position
         const lineHeight = fontSize * 1.25;
         const totalTextHeight = displayedLines.length * lineHeight;
-        let y = height * 0.6; // Start at 60% down the image
         
-        // Adjust vertical position to center the text block
-        y = y - (totalTextHeight / 2);
+        // Start position adjusted for text block height
+        let y = yPos - (totalTextHeight / 2);
         
         // Draw each line
         displayedLines.forEach(line => {
-          ctx.fillText(line, leftPadding, y);
+          ctx.fillText(line, xPos, y);
           y += lineHeight;
         });
         
@@ -498,12 +988,21 @@ const ScriptToScenes = () => {
           // Apply text overlay if needed
           if (shouldAddOverlay) {
             console.log(`Applying text overlay to scene ${index}`);
-            imageUrl = await renderTextOverlay(imageUrl, scene.description, index);
+            // Use edited text if available
+            const textToUse = editedDescriptions[index] || scene.description;
+            imageUrl = await renderTextOverlay(imageUrl, textToUse, index);
           }
           
           return {
             imageUrl: imageUrl,
-            description: scene.description
+            description: editedDescriptions[index] || scene.description, // Use edited text for API
+            textPosition: textPositions[index] || { x: 50, y: 60 }, // Include text position data
+            textStyle: textStyles[index] || {
+              color: "#FFFFFF",
+              fontFamily: "Arial",
+              isBold: true,
+              fontSize: 16
+            } // Include text style data
           };
         })
       );
@@ -747,37 +1246,73 @@ const ScriptToScenes = () => {
                   />
                   
                   {showOverlays[index] && (
-                    <div className="absolute inset-0 flex items-center justify-center p-4">
-                      <p className="text-white text-sm text-center leading-tight max-w-[80%] drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)]">
-                        {scene.description}
+                    <div 
+                      className="absolute p-4 pointer-events-none" 
+                      style={{ 
+                        left: `${textPositions[index]?.x || 50}%`, 
+                        top: `${textPositions[index]?.y || 60}%`,
+                        transform: 'translate(-50%, -50%)',
+                        maxWidth: '80%',
+                        color: textStyles[index]?.color || '#FFFFFF',
+                        fontFamily: textStyles[index]?.fontFamily || 'Arial',
+                        fontWeight: textStyles[index]?.isBold ? 'bold' : 'normal',
+                        fontSize: `${textStyles[index]?.fontSize || 16}px`
+                      }}
+                    >
+                      <p className="text-center leading-tight drop-shadow-[0_2px_4px_rgba(0,0,0,0.7)]">
+                        {editedDescriptions[index] || scene.description}
                       </p>
                     </div>
                   )}
                   
-                  <button 
-                    onClick={() => toggleOverlay(index)}
-                    className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white p-1 rounded-full transition-colors"
-                    title={showOverlays[index] ? "Hide description" : "Show description"}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      {showOverlays[index] ? (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                      ) : (
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      )}
-                    </svg>
-                  </button>
+                  <div className="absolute top-2 right-2 flex space-x-1">
+                    <button 
+                      onClick={() => openEditModal(index)}
+                      className="bg-black/50 hover:bg-black/70 text-white p-1 rounded-full transition-colors"
+                      title="Edit overlay text"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    
+                    <button 
+                      onClick={() => toggleOverlay(index)}
+                      className="bg-black/50 hover:bg-black/70 text-white p-1 rounded-full transition-colors"
+                      title={showOverlays[index] ? "Hide description" : "Show description"}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        {showOverlays[index] ? (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                        ) : (
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        )}
+                      </svg>
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="p-3 flex justify-between items-center">
-                  <button 
-                    className="text-xs text-gray-400 hover:text-tiktok-pink transition-colors"
-                    onClick={() => {
-                      navigator.clipboard.writeText(scene.description);
-                    }}
-                  >
-                    Copy Description
-                  </button>
+                  <div className="flex space-x-2">
+                    <button 
+                      className="text-xs text-gray-400 hover:text-tiktok-pink transition-colors"
+                      onClick={() => {
+                        navigator.clipboard.writeText(editedDescriptions[index] || scene.description);
+                      }}
+                    >
+                      Copy Text
+                    </button>
+                    
+                    {editedDescriptions[index] !== scene.description && (
+                      <button 
+                        className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                        onClick={() => resetEditedText(index)}
+                        title="Reset to original text"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
                   
                   <div className="flex items-center">
                     <span className="text-gray-500 mr-2 text-xs">Text:</span>
@@ -890,6 +1425,21 @@ const ScriptToScenes = () => {
           </div>
         </div>
       )}
+      
+      {/* Text Editor Modal */}
+      <TextEditorModal
+        isOpen={isEditModalOpen}
+        onClose={closeEditModal}
+        text={currentEditingIndex !== null ? (editedDescriptions[currentEditingIndex] || sceneImages[currentEditingIndex]?.description || '') : ''}
+        onSave={saveEditedText}
+        title={`Edit Text for Scene ${currentEditingIndex !== null ? currentEditingIndex + 1 : ''}`}
+        scene={currentEditingIndex !== null ? {
+          ...sceneImages[currentEditingIndex],
+          textPosition: textPositions[currentEditingIndex],
+          textStyle: textStyles[currentEditingIndex]
+        } : null}
+        index={currentEditingIndex}
+      />
     </div>
   );
 };
