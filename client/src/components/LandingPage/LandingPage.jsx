@@ -1,30 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import TikTokLogo from '../common/TikTokLogo';
+import StorySceneLogo from '../common/StorySceneLogo';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-
-// Add StoryScene logo component
-const StorySceneLogo = () => (
-  <svg height="42" width="200" xmlns="http://www.w3.org/2000/svg" viewBox="41 0 200 42">
-    {/* Larger "StoryScene" text */}
-    <text x="40" y="26" fontFamily="Arial" fontWeight="bold" fontSize="20" fill="white">StoryScene</text>
-    
-    {/* "AI" with gradient text */}
-    <text x="151" y="26" fontFamily="Arial" fontWeight="bold" fontSize="20" fill="url(#textGradient)">AI</text>
-    
-    {/* Define gradients */}
-    <defs>
-      <linearGradient id="sceneGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#25F4EE" />
-        <stop offset="100%" stopColor="#FE2C55" />
-      </linearGradient>
-      <linearGradient id="textGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#25F4EE" />
-        <stop offset="100%" stopColor="#FE2C55" />
-      </linearGradient>
-    </defs>
-  </svg>
-);
 
 const LandingPage = () => {
   const videosRef = useRef({});

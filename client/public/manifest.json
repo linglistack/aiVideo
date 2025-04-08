@@ -1,6 +1,7 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "StoryScene AI",
+  "name": "StoryScene AI - Create Amazing Visual Stories",
+  "description": "Create stunning videos, images, and stories with AI",
   "icons": [
     {
       "src": "favicon.ico",
@@ -8,18 +9,18 @@
       "type": "image/x-icon"
     },
     {
-      "src": "logo192.png",
+      "src": "logo/storySceneLogo192.png",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "logo512.png",
+      "src": "logo/storySceneLogo512.png",
       "type": "image/png",
       "sizes": "512x512"
     }
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
-  "background_color": "#ffffff"
+  "theme_color": "#25F4EE",
+  "background_color": "#000000"
 }
