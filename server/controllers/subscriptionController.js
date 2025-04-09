@@ -575,8 +575,16 @@ const handleWebhook = async (req, res) => {
       process.env.STRIPE_WEBHOOK_SECRET
     );
     
+    console.log(`🪝 Webhook received: ${event.type}`);
+    
     // Handle the event
     switch (event.type) {
+      case 'invoice.created':
+        await handleInvoiceCreated(event.data.object);
+        break;
+      case 'invoice.finalized':
+        await handleInvoiceFinalized(event.data.object);
+        break;
       case 'invoice.payment_succeeded':
         await handleInvoicePaymentSucceeded(event.data.object);
         break;
@@ -597,10 +605,52 @@ const handleWebhook = async (req, res) => {
   }
 };
 
+// New handler for invoice.created events
+const handleInvoiceCreated = async (invoice) => {
+  try {
+    console.log(`📝 Processing invoice.created: ${invoice.id}`);
+    
+    // For subscription invoices, finalize them immediately
+    if (invoice.subscription && invoice.status === 'draft') {
+      console.log(`Finalizing draft invoice ${invoice.id} for subscription ${invoice.subscription}`);
+      try {
+        await stripe.invoices.finalizeInvoice(invoice.id);
+        console.log(`Successfully finalized invoice ${invoice.id}`);
+      } catch (error) {
+        console.error(`Error finalizing invoice ${invoice.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling invoice created:', error);
+  }
+};
+
+// New handler for invoice.finalized events
+const handleInvoiceFinalized = async (invoice) => {
+  try {
+    console.log(`📝 Processing invoice.finalized: ${invoice.id}`);
+    
+    // For subscription invoices, attempt payment if it's not already paid
+    if (invoice.subscription && invoice.status !== 'paid') {
+      console.log(`Attempting payment for finalized invoice ${invoice.id}`);
+      try {
+        await stripe.invoices.pay(invoice.id);
+        console.log(`Successfully paid invoice ${invoice.id}`);
+      } catch (error) {
+        console.error(`Error paying invoice ${invoice.id}:`, error);
+      }
+    }
+  } catch (error) {
+    console.error('Error handling invoice finalized:', error);
+  }
+};
+
 // Helper webhook handlers
 const handleInvoicePaymentSucceeded = async (invoice) => {
   // Update subscription status to active and extend end date
   try {
+    console.log(`💰 Processing invoice.payment_succeeded: ${invoice.id}`);
+    
     const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
     const customer = await stripe.customers.retrieve(invoice.customer);
     const userId = customer.metadata.userId;
